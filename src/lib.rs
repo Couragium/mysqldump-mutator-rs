@@ -38,8 +38,3 @@ pub mod ast;
 pub mod dialect;
 pub mod parser;
 pub mod tokenizer;
-
-#[doc(hidden)]
-// This is required to make utilities accessible by both the crate-internal
-// unit-tests and by the integration tests <https://stackoverflow.com/a/44541071/1026>
-pub mod test_utils;

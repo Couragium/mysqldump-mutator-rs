@@ -16,11 +16,13 @@
 //!
 //! The tokens then form the input for the parser, which outputs an Abstract Syntax Tree (AST).
 
+use std::io::BufRead;
 use std::iter::Peekable;
-use std::str::Chars;
+use utf8_chars::{BufReadCharsExt, Chars};
 
 use super::dialect::keywords::ALL_KEYWORDS;
 use super::dialect::Dialect;
+use std::collections::VecDeque;
 use std::fmt;
 
 /// SQL Token enumeration
@@ -215,29 +217,29 @@ pub struct TokenizerError(String);
 /// SQL Tokenizer
 pub struct Tokenizer<'a> {
     dialect: &'a dyn Dialect,
-    pub query: String,
+    pub query: Peekable<Chars<'a, dyn BufRead + 'a>>,
     pub line: u64,
     pub col: u64,
+    peeked_tokens: VecDeque<Token>,
 }
 
 impl<'a> Tokenizer<'a> {
     /// Create a new SQL tokenizer for the specified SQL statement
-    pub fn new(dialect: &'a dyn Dialect, query: &str) -> Self {
+    pub fn new(dialect: &'a dyn Dialect, query: &'a mut dyn BufRead) -> Self {
         Self {
             dialect,
-            query: query.to_string(),
+            query: query.chars().peekable(),
             line: 1,
             col: 1,
+            peeked_tokens: VecDeque::new(),
         }
     }
 
     /// Tokenize the statement and produce a vector of tokens
     pub fn tokenize(&mut self) -> Result<Vec<Token>, TokenizerError> {
-        let mut peekable = self.query.chars().peekable();
-
         let mut tokens: Vec<Token> = vec![];
 
-        while let Some(token) = self.next_token(&mut peekable)? {
+        while let Some(token) = self.next_token()? {
             match &token {
                 Token::Whitespace(Whitespace::Newline) => {
                     self.line += 1;
@@ -257,33 +259,58 @@ impl<'a> Tokenizer<'a> {
         Ok(tokens)
     }
 
+    pub fn peek_token(&mut self, n: usize) -> Result<Option<Token>, TokenizerError> {
+        // We need to have a peeked token at least in case they send us n=0
+        if self.peeked_tokens.len() <= n {
+            //Peek enough in order to get the one we want. Including 1 token when n=0
+            let tokens_to_peek = n - self.peeked_tokens.len() + 1;
+            for _ in 0..tokens_to_peek {
+                match self.next_token() {
+                    Ok(Some(token)) => {
+                        self.peeked_tokens.push_back(token);
+                    }
+                    _ => return Err(TokenizerError("Unexpected EOF.".to_string())),
+                }
+            }
+        }
+
+        Ok(Some(self.peeked_tokens[n].clone()))
+    }
+
+    pub fn pushback_token(&mut self, token: Token) {
+        self.peeked_tokens.push_front(token);
+    }
+
     /// Get the next token or return None
-    fn next_token(&self, chars: &mut Peekable<Chars<'_>>) -> Result<Option<Token>, TokenizerError> {
+    pub fn next_token(&mut self) -> Result<Option<Token>, TokenizerError> {
+        if let Some(token) = self.peeked_tokens.pop_front() {
+            return Ok(Some(token));
+        }
         //println!("next_token: {:?}", chars.peek());
-        match chars.peek() {
-            Some(&ch) => match ch {
-                ' ' => self.consume_and_return(chars, Token::Whitespace(Whitespace::Space)),
-                '\t' => self.consume_and_return(chars, Token::Whitespace(Whitespace::Tab)),
-                '\n' => self.consume_and_return(chars, Token::Whitespace(Whitespace::Newline)),
+        match self.query.peek() {
+            Some(Ok(ch)) => match *ch {
+                ' ' => self.consume_and_return(Token::Whitespace(Whitespace::Space)),
+                '\t' => self.consume_and_return(Token::Whitespace(Whitespace::Tab)),
+                '\n' => self.consume_and_return(Token::Whitespace(Whitespace::Newline)),
                 '\r' => {
                     // Emit a single Whitespace::Newline token for \r and \r\n
-                    chars.next();
-                    if let Some('\n') = chars.peek() {
-                        chars.next();
+                    self.query.next();
+                    if let Some(Ok('\n')) = self.query.peek() {
+                        self.query.next();
                     }
                     Ok(Some(Token::Whitespace(Whitespace::Newline)))
                 }
                 'N' => {
-                    chars.next(); // consume, to check the next char
-                    match chars.peek() {
-                        Some('\'') => {
+                    self.query.next(); // consume, to check the next char
+                    match self.query.peek() {
+                        Some(Ok('\'')) => {
                             // N'...' - a <national character string literal>
-                            let s = self.tokenize_single_quoted_string(chars);
+                            let s = self.tokenize_single_quoted_string();
                             Ok(Some(Token::NationalStringLiteral(s)))
                         }
                         _ => {
                             // regular identifier starting with an "N"
-                            let s = self.tokenize_word('N', chars);
+                            let s = self.tokenize_word('N');
                             Ok(Some(Token::make_word(&s, None)))
                         }
                     }
@@ -291,66 +318,67 @@ impl<'a> Tokenizer<'a> {
                 // The spec only allows an uppercase 'X' to introduce a hex
                 // string, but PostgreSQL, at least, allows a lowercase 'x' too.
                 x @ 'x' | x @ 'X' => {
-                    chars.next(); // consume, to check the next char
-                    match chars.peek() {
-                        Some('\'') => {
+                    self.query.next(); // consume, to check the next char
+                    match self.query.peek() {
+                        Some(Ok('\'')) => {
                             // X'...' - a <binary string literal>
-                            let s = self.tokenize_single_quoted_string(chars);
+                            let s = self.tokenize_single_quoted_string();
                             Ok(Some(Token::HexStringLiteral(s)))
                         }
                         _ => {
                             // regular identifier starting with an "X"
-                            let s = self.tokenize_word(x, chars);
+                            let s = self.tokenize_word(x);
                             Ok(Some(Token::make_word(&s, None)))
                         }
                     }
                 }
                 // identifier or keyword
                 ch if self.dialect.is_identifier_start(ch) => {
-                    chars.next(); // consume the first char
-                    let s = self.tokenize_word(ch, chars);
+                    self.query.next(); // consume the first char
+                    let s = self.tokenize_word(ch);
                     Ok(Some(Token::make_word(&s, None)))
                 }
                 // string
                 '\'' => {
-                    let s = self.tokenize_single_quoted_string(chars);
+                    let s = self.tokenize_single_quoted_string();
                     Ok(Some(Token::SingleQuotedString(s)))
                 }
                 // delimited (quoted) identifier
                 quote_start if self.dialect.is_delimited_identifier_start(quote_start) => {
-                    chars.next(); // consume the opening quote
+                    self.query.next(); // consume the opening quote
                     let quote_end = Word::matching_end_quote(quote_start);
-                    let s = peeking_take_while(chars, |ch| ch != quote_end);
-                    if chars.next() == Some(quote_end) {
-                        Ok(Some(Token::make_word(&s, Some(quote_start))))
-                    } else {
-                        Err(TokenizerError(format!(
+                    let s = self.peeking_take_while(|ch| ch != quote_end);
+                    match self.query.next() {
+                        Some(Ok(ch)) if ch == quote_end => {
+                            Ok(Some(Token::make_word(&s, Some(quote_start))))
+                        }
+                        _ => Err(TokenizerError(format!(
                             "Expected close delimiter '{}' before EOF.",
                             quote_end
-                        )))
+                        ))),
                     }
                 }
                 // numbers
                 '0'..='9' => {
                     // TODO: https://jakewheat.github.io/sql-overview/sql-2011-foundation-grammar.html#unsigned-numeric-literal
-                    let s = peeking_take_while(chars, |ch| match ch {
+                    let s = self.peeking_take_while(|ch| match ch {
                         '0'..='9' | '.' => true,
                         _ => false,
                     });
                     Ok(Some(Token::Number(s)))
                 }
                 // punctuation
-                '(' => self.consume_and_return(chars, Token::LParen),
-                ')' => self.consume_and_return(chars, Token::RParen),
-                ',' => self.consume_and_return(chars, Token::Comma),
+                '(' => self.consume_and_return(Token::LParen),
+                ')' => self.consume_and_return(Token::RParen),
+                ',' => self.consume_and_return(Token::Comma),
                 // operators
                 '-' => {
-                    chars.next(); // consume the '-'
-                    match chars.peek() {
-                        Some('-') => {
-                            chars.next(); // consume the second '-', starting a single-line comment
-                            let mut s = peeking_take_while(chars, |ch| ch != '\n');
-                            if let Some(ch) = chars.next() {
+                    self.query.next(); // consume the '-'
+                    match self.query.peek() {
+                        Some(Ok('-')) => {
+                            self.query.next(); // consume the second '-', starting a single-line comment
+                            let mut s = self.peeking_take_while(|ch| ch != '\n');
+                            if let Some(Ok(ch)) = self.query.next() {
                                 assert_eq!(ch, '\n');
                                 s.push(ch);
                             }
@@ -361,25 +389,25 @@ impl<'a> Tokenizer<'a> {
                     }
                 }
                 '/' => {
-                    chars.next(); // consume the '/'
-                    match chars.peek() {
-                        Some('*') => {
-                            chars.next(); // consume the '*', starting a multi-line comment
-                            self.tokenize_multiline_comment(chars)
+                    self.query.next(); // consume the '/'
+                    match self.query.peek() {
+                        Some(Ok('*')) => {
+                            self.query.next(); // consume the '*', starting a multi-line comment
+                            self.tokenize_multiline_comment()
                         }
                         // a regular '/' operator
                         _ => Ok(Some(Token::Div)),
                     }
                 }
-                '+' => self.consume_and_return(chars, Token::Plus),
-                '*' => self.consume_and_return(chars, Token::Mult),
-                '%' => self.consume_and_return(chars, Token::Mod),
-                '=' => self.consume_and_return(chars, Token::Eq),
-                '.' => self.consume_and_return(chars, Token::Period),
+                '+' => self.consume_and_return(Token::Plus),
+                '*' => self.consume_and_return(Token::Mult),
+                '%' => self.consume_and_return(Token::Mod),
+                '=' => self.consume_and_return(Token::Eq),
+                '.' => self.consume_and_return(Token::Period),
                 '!' => {
-                    chars.next(); // consume
-                    match chars.peek() {
-                        Some('=') => self.consume_and_return(chars, Token::Neq),
+                    self.query.next(); // consume
+                    match self.query.peek() {
+                        Some(Ok('=')) => self.consume_and_return(Token::Neq),
                         _ => Err(TokenizerError(format!(
                             "Tokenizer Error at Line: {}, Col: {}",
                             self.line, self.col
@@ -387,62 +415,65 @@ impl<'a> Tokenizer<'a> {
                     }
                 }
                 '<' => {
-                    chars.next(); // consume
-                    match chars.peek() {
-                        Some('=') => self.consume_and_return(chars, Token::LtEq),
-                        Some('>') => self.consume_and_return(chars, Token::Neq),
+                    self.query.next(); // consume
+                    match self.query.peek() {
+                        Some(Ok('=')) => self.consume_and_return(Token::LtEq),
+                        Some(Ok('>')) => self.consume_and_return(Token::Neq),
                         _ => Ok(Some(Token::Lt)),
                     }
                 }
                 '>' => {
-                    chars.next(); // consume
-                    match chars.peek() {
-                        Some('=') => self.consume_and_return(chars, Token::GtEq),
+                    self.query.next(); // consume
+                    match self.query.peek() {
+                        Some(Ok('=')) => self.consume_and_return(Token::GtEq),
                         _ => Ok(Some(Token::Gt)),
                     }
                 }
                 ':' => {
-                    chars.next();
-                    match chars.peek() {
-                        Some(':') => self.consume_and_return(chars, Token::DoubleColon),
+                    self.query.next();
+                    match self.query.peek() {
+                        Some(Ok(':')) => self.consume_and_return(Token::DoubleColon),
                         _ => Ok(Some(Token::Colon)),
                     }
                 }
-                ';' => self.consume_and_return(chars, Token::SemiColon),
-                '\\' => self.consume_and_return(chars, Token::Backslash),
-                '[' => self.consume_and_return(chars, Token::LBracket),
-                ']' => self.consume_and_return(chars, Token::RBracket),
-                '&' => self.consume_and_return(chars, Token::Ampersand),
-                '{' => self.consume_and_return(chars, Token::LBrace),
-                '}' => self.consume_and_return(chars, Token::RBrace),
-                other => self.consume_and_return(chars, Token::Char(other)),
+                ';' => self.consume_and_return(Token::SemiColon),
+                '\\' => self.consume_and_return(Token::Backslash),
+                '[' => self.consume_and_return(Token::LBracket),
+                ']' => self.consume_and_return(Token::RBracket),
+                '&' => self.consume_and_return(Token::Ampersand),
+                '{' => self.consume_and_return(Token::LBrace),
+                '}' => self.consume_and_return(Token::RBrace),
+                other => self.consume_and_return(Token::Char(other)),
             },
-            None => Ok(None),
+            _ => Ok(None),
         }
     }
 
     /// Tokenize an identifier or keyword, after the first char is already consumed.
-    fn tokenize_word(&self, first_char: char, chars: &mut Peekable<Chars<'_>>) -> String {
+    fn tokenize_word(&mut self, first_char: char) -> String {
         let mut s = first_char.to_string();
-        s.push_str(&peeking_take_while(chars, |ch| {
-            self.dialect.is_identifier_part(ch)
-        }));
+        let dialect = self.dialect;
+        s.push_str(&self.peeking_take_while(|ch| dialect.is_identifier_part(ch)));
         s
     }
 
     /// Read a single quoted string, starting with the opening quote.
-    fn tokenize_single_quoted_string(&self, chars: &mut Peekable<Chars<'_>>) -> String {
+    fn tokenize_single_quoted_string(&mut self) -> String {
         //TODO: handle escaped quotes in string
         //TODO: handle newlines in string
         //TODO: handle EOF before terminating quote
         //TODO: handle 'string' <white space> 'string continuation'
+        let chars = &mut self.query;
         let mut s = String::new();
         chars.next(); // consume the opening quote
-        while let Some(&ch) = chars.peek() {
-            match ch {
+        while let Some(Ok(ch)) = chars.peek() {
+            match *ch {
                 '\'' => {
                     chars.next(); // consume
-                    let escaped_quote = chars.peek().map(|c| *c == '\'').unwrap_or(false);
+                    let escaped_quote = chars
+                        .peek()
+                        .map(|c| c.as_ref().unwrap() == &'\'')
+                        .unwrap_or(false);
                     if escaped_quote {
                         s.push('\'');
                         chars.next();
@@ -450,7 +481,7 @@ impl<'a> Tokenizer<'a> {
                         break;
                     }
                 }
-                _ => {
+                ch => {
                     chars.next(); // consume
                     s.push(ch);
                 }
@@ -459,16 +490,13 @@ impl<'a> Tokenizer<'a> {
         s
     }
 
-    fn tokenize_multiline_comment(
-        &self,
-        chars: &mut Peekable<Chars<'_>>,
-    ) -> Result<Option<Token>, TokenizerError> {
+    fn tokenize_multiline_comment(&mut self) -> Result<Option<Token>, TokenizerError> {
         let mut s = String::new();
         let mut maybe_closing_comment = false;
         // TODO: deal with nested comments
         loop {
-            match chars.next() {
-                Some(ch) => {
+            match self.query.next() {
+                Some(Ok(ch)) => {
                     if maybe_closing_comment {
                         if ch == '/' {
                             break Ok(Some(Token::Whitespace(Whitespace::MultiLineComment(s))));
@@ -481,7 +509,7 @@ impl<'a> Tokenizer<'a> {
                         s.push(ch);
                     }
                 }
-                None => {
+                _ => {
                     break Err(TokenizerError(
                         "Unexpected EOF while in a multi-line comment".to_string(),
                     ));
@@ -490,326 +518,25 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn consume_and_return(
-        &self,
-        chars: &mut Peekable<Chars<'_>>,
-        t: Token,
-    ) -> Result<Option<Token>, TokenizerError> {
-        chars.next();
+    fn consume_and_return(&mut self, t: Token) -> Result<Option<Token>, TokenizerError> {
+        self.query.next();
         Ok(Some(t))
     }
-}
 
-/// Read from `chars` until `predicate` returns `false` or EOF is hit.
-/// Return the characters read as String, and keep the first non-matching
-/// char available as `chars.next()`.
-fn peeking_take_while(
-    chars: &mut Peekable<Chars<'_>>,
-    mut predicate: impl FnMut(char) -> bool,
-) -> String {
-    let mut s = String::new();
-    while let Some(&ch) = chars.peek() {
-        if predicate(ch) {
-            chars.next(); // consume
-            s.push(ch);
-        } else {
-            break;
+    /// Read from `chars` until `predicate` returns `false` or EOF is hit.
+    /// Return the characters read as String, and keep the first non-matching
+    /// char available as `chars.next()`.
+    fn peeking_take_while(&mut self, mut predicate: impl FnMut(char) -> bool) -> String {
+        let mut s = String::new();
+        while let Some(Ok(ch)) = self.query.peek() {
+            let ch = *ch;
+            if predicate(ch) {
+                self.query.next(); // consume
+                s.push(ch);
+            } else {
+                break;
+            }
         }
-    }
-    s
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::dialect::GenericDialect;
-    use super::super::dialect::MsSqlDialect;
-    use super::*;
-
-    #[test]
-    fn tokenize_select_1() {
-        let sql = String::from("SELECT 1");
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-
-        let expected = vec![
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Number(String::from("1")),
-        ];
-
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_scalar_function() {
-        let sql = String::from("SELECT sqrt(1)");
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-
-        let expected = vec![
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("sqrt", None),
-            Token::LParen,
-            Token::Number(String::from("1")),
-            Token::RParen,
-        ];
-
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_simple_select() {
-        let sql = String::from("SELECT * FROM customer WHERE id = 1 LIMIT 5");
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-
-        let expected = vec![
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Mult,
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("FROM"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("customer", None),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("WHERE"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("id", None),
-            Token::Whitespace(Whitespace::Space),
-            Token::Eq,
-            Token::Whitespace(Whitespace::Space),
-            Token::Number(String::from("1")),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("LIMIT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Number(String::from("5")),
-        ];
-
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_string_predicate() {
-        let sql = String::from("SELECT * FROM customer WHERE salary != 'Not Provided'");
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-
-        let expected = vec![
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Mult,
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("FROM"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("customer", None),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("WHERE"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("salary", None),
-            Token::Whitespace(Whitespace::Space),
-            Token::Neq,
-            Token::Whitespace(Whitespace::Space),
-            Token::SingleQuotedString(String::from("Not Provided")),
-        ];
-
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_invalid_string() {
-        let sql = String::from("\nمصطفىh");
-
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-        println!("tokens: {:#?}", tokens);
-        let expected = vec![
-            Token::Whitespace(Whitespace::Newline),
-            Token::Char('م'),
-            Token::Char('ص'),
-            Token::Char('ط'),
-            Token::Char('ف'),
-            Token::Char('ى'),
-            Token::make_word("h", None),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_invalid_string_cols() {
-        let sql = String::from("\n\nSELECT * FROM table\tمصطفىh");
-
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-        println!("tokens: {:#?}", tokens);
-        let expected = vec![
-            Token::Whitespace(Whitespace::Newline),
-            Token::Whitespace(Whitespace::Newline),
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Mult,
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("FROM"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("table"),
-            Token::Whitespace(Whitespace::Tab),
-            Token::Char('م'),
-            Token::Char('ص'),
-            Token::Char('ط'),
-            Token::Char('ف'),
-            Token::Char('ى'),
-            Token::make_word("h", None),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_is_null() {
-        let sql = String::from("a IS NULL");
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-
-        let expected = vec![
-            Token::make_word("a", None),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("IS"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("NULL"),
-        ];
-
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_comment() {
-        let sql = String::from("0--this is a comment\n1");
-
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-        let expected = vec![
-            Token::Number("0".to_string()),
-            Token::Whitespace(Whitespace::SingleLineComment(
-                "this is a comment\n".to_string(),
-            )),
-            Token::Number("1".to_string()),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_comment_at_eof() {
-        let sql = String::from("--this is a comment");
-
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-        let expected = vec![Token::Whitespace(Whitespace::SingleLineComment(
-            "this is a comment".to_string(),
-        ))];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_multiline_comment() {
-        let sql = String::from("0/*multi-line\n* /comment*/1");
-
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-        let expected = vec![
-            Token::Number("0".to_string()),
-            Token::Whitespace(Whitespace::MultiLineComment(
-                "multi-line\n* /comment".to_string(),
-            )),
-            Token::Number("1".to_string()),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_multiline_comment_with_even_asterisks() {
-        let sql = String::from("\n/** Comment **/\n");
-
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-        let expected = vec![
-            Token::Whitespace(Whitespace::Newline),
-            Token::Whitespace(Whitespace::MultiLineComment("* Comment *".to_string())),
-            Token::Whitespace(Whitespace::Newline),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_mismatched_quotes() {
-        let sql = String::from("\"foo");
-
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        assert_eq!(
-            tokenizer.tokenize(),
-            Err(TokenizerError(
-                "Expected close delimiter '\"' before EOF.".to_string(),
-            ))
-        );
-    }
-
-    #[test]
-    fn tokenize_newlines() {
-        let sql = String::from("line1\nline2\rline3\r\nline4\r");
-
-        let dialect = GenericDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, &sql);
-        let tokens = tokenizer.tokenize().unwrap();
-        let expected = vec![
-            Token::make_word("line1", None),
-            Token::Whitespace(Whitespace::Newline),
-            Token::make_word("line2", None),
-            Token::Whitespace(Whitespace::Newline),
-            Token::make_word("line3", None),
-            Token::Whitespace(Whitespace::Newline),
-            Token::make_word("line4", None),
-            Token::Whitespace(Whitespace::Newline),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_mssql_top() {
-        let sql = "SELECT TOP 5 [bar] FROM foo";
-        let dialect = MsSqlDialect {};
-        let mut tokenizer = Tokenizer::new(&dialect, sql);
-        let tokens = tokenizer.tokenize().unwrap();
-        let expected = vec![
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("TOP"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Number(String::from("5")),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("bar", Some('[')),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("FROM"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("foo", None),
-        ];
-        compare(expected, tokens);
-    }
-
-    fn compare(expected: Vec<Token>, actual: Vec<Token>) {
-        //println!("------------------------------");
-        //println!("tokens   = {:?}", actual);
-        //println!("expected = {:?}", expected);
-        //println!("------------------------------");
-        assert_eq!(expected, actual);
+        s
     }
 }
