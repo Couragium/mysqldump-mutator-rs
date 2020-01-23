@@ -235,37 +235,13 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    /// Tokenize the statement and produce a vector of tokens
-    pub fn tokenize(&mut self) -> Result<Vec<Token>, TokenizerError> {
-        let mut tokens: Vec<Token> = vec![];
-
-        while let Some(token) = self.next_token()? {
-            match &token {
-                Token::Whitespace(Whitespace::Newline) => {
-                    self.line += 1;
-                    self.col = 1;
-                }
-
-                Token::Whitespace(Whitespace::Tab) => self.col += 4,
-                Token::Word(w) if w.quote_style == None => self.col += w.value.len() as u64,
-                Token::Word(w) if w.quote_style != None => self.col += w.value.len() as u64 + 2,
-                Token::Number(s) => self.col += s.len() as u64,
-                Token::SingleQuotedString(s) => self.col += s.len() as u64,
-                _ => self.col += 1,
-            }
-
-            tokens.push(token);
-        }
-        Ok(tokens)
-    }
-
     pub fn peek_token(&mut self, n: usize) -> Result<Option<Token>, TokenizerError> {
         // We need to have a peeked token at least in case they send us n=0
         if self.peeked_tokens.len() <= n {
             //Peek enough in order to get the one we want. Including 1 token when n=0
             let tokens_to_peek = n - self.peeked_tokens.len() + 1;
             for _ in 0..tokens_to_peek {
-                match self.next_token() {
+                match self.internal_next_token() {
                     Ok(Some(token)) => {
                         self.peeked_tokens.push_back(token);
                     }
@@ -273,7 +249,6 @@ impl<'a> Tokenizer<'a> {
                 }
             }
         }
-
         Ok(Some(self.peeked_tokens[n].clone()))
     }
 
@@ -286,7 +261,11 @@ impl<'a> Tokenizer<'a> {
         if let Some(token) = self.peeked_tokens.pop_front() {
             return Ok(Some(token));
         }
-        //println!("next_token: {:?}", chars.peek());
+        
+        self.internal_next_token()
+    }
+
+    fn internal_next_token(&mut self) -> Result<Option<Token>, TokenizerError> {
         match self.query.peek() {
             Some(Ok(ch)) => match *ch {
                 ' ' => self.consume_and_return(Token::Whitespace(Whitespace::Space)),

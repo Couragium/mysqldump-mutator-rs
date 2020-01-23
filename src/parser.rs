@@ -26,6 +26,7 @@ pub enum ParserError {
     TokenizerError(String),
     ParserError(String),
     Ignored,
+    End,
 }
 
 // Use `Parser::expected` instead, if possible
@@ -62,6 +63,7 @@ impl fmt::Display for ParserError {
                 ParserError::TokenizerError(s) => s,
                 ParserError::ParserError(s) => s,
                 ParserError::Ignored => "Ignored",
+                ParserError::End => "EOF",
             }
         )
     }
@@ -69,22 +71,137 @@ impl fmt::Display for ParserError {
 
 impl Error for ParserError {}
 
+#[derive(Debug)]
+enum SQLContextType {
+    None,
+    CreateTable(String),
+    ColumnDefinition((String, String, usize)),
+    Insert(InsertContext),
+}
+
+#[derive(Debug)]
+enum InsertContext {
+    None,
+    Table(String),
+    Value((String, usize)),
+}
+
+#[derive(Debug)]
+pub struct SQLContext {
+    context: SQLContextType,
+}
+
+impl Default for SQLContext {
+    fn default() -> Self {
+        SQLContext::new()
+    }
+}
+
+impl SQLContext {
+    pub fn new() -> SQLContext {
+        SQLContext {
+            context: SQLContextType::None,
+        }
+    }
+
+    fn started_create_table(&mut self, table: String) {
+        if let SQLContextType::None = self.context {
+            return self.context = SQLContextType::CreateTable(table);
+        }
+
+        panic!("Invalid context state");
+    }
+
+    fn ended_create_table(&mut self) {
+        if let SQLContextType::CreateTable(_) = self.context {
+            self.context = SQLContextType::None
+        }
+
+        panic!("Invalid context state");
+    }
+
+    fn started_column_definition(&mut self, column: String, index: usize) {
+        if let SQLContextType::CreateTable(table) = &self.context {
+            self.context = SQLContextType::ColumnDefinition((table.clone(), column, index))
+        }
+
+        panic!("Invalid context state");
+    }
+
+    fn ended_column_definition(&mut self) {
+        if let SQLContextType::ColumnDefinition((table, _, _)) = &self.context {
+            self.context = SQLContextType::CreateTable(table.clone())
+        }
+
+        panic!("Invalid context state");
+    }
+
+    fn started_insert(&mut self) {
+        if let SQLContextType::None = self.context {
+            return self.context = SQLContextType::Insert(InsertContext::None);
+        }
+
+        panic!("Invalid context state");
+    }
+
+    fn ended_insert(&mut self) {
+        if let SQLContextType::Insert(_) = self.context {
+            self.context = SQLContextType::None
+        }
+
+        panic!("Invalid context state");
+    }
+
+    fn started_insert_table(&mut self, table: String) {
+        if let SQLContextType::Insert(InsertContext::None) = self.context {
+            return self.context = SQLContextType::Insert(InsertContext::Table(table));
+        }
+
+        panic!("Invalid context state");
+    }
+
+    fn ended_insert_table(&mut self) {
+        self.ended_insert();
+    }
+
+    fn started_insert_value(&mut self, column: usize) {
+        if let SQLContextType::Insert(InsertContext::Table(table)) = &self.context {
+            return self.context =
+                SQLContextType::Insert(InsertContext::Value((table.clone(), column)));
+        }
+
+        panic!("Invalid context state");
+    }
+
+    fn ended_insert_value(&mut self) {
+        self.ended_insert();
+    }
+}
+
 /// SQL Parser
 pub struct Parser<'a> {
     index: usize,
     commited_tokens: Vec<Token>,
     tokenizer: Tokenizer<'a>,
     last_tokens: Vec<Token>,
+    context: SQLContext,
+    value_handler: Option<&'a dyn Fn(&SQLContext, Token) -> Token>,
 }
 
 impl<'a> Parser<'a> {
     /// Parse the specified tokens
-    pub fn new(dialect: &'a (dyn Dialect + 'a), sql: &'a mut dyn std::io::BufRead) -> Self {
+    pub fn new(
+        dialect: &'a (dyn Dialect + 'a),
+        sql: &'a mut dyn std::io::BufRead,
+        handler: &'a dyn Fn(&SQLContext, Token) -> Token,
+    ) -> Self {
         Parser {
             index: 0,
             commited_tokens: vec![],
             tokenizer: Tokenizer::new(dialect, sql),
             last_tokens: vec![],
+            context: SQLContext::new(),
+            value_handler: Some(handler),
         }
     }
 
@@ -92,8 +209,9 @@ impl<'a> Parser<'a> {
     pub fn parse_sql(
         dialect: &dyn Dialect,
         sql: &mut dyn std::io::BufRead,
+        handler: &'a dyn Fn(&SQLContext, Token) -> Token,
     ) -> Result<Vec<Statement>, ParserError> {
-        let mut parser = Parser::new(dialect, sql);
+        let mut parser = Parser::new(dialect, sql, handler);
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
 
@@ -110,9 +228,20 @@ impl<'a> Parser<'a> {
                 return parser.expected("end of statement", token);
             }
 
-            let statement = parser.parse_statement()?;
-            stmts.push(statement);
-            expecting_statement_delimiter = true;
+            let result = parser.parse_statement();
+println!("{:?}", result);
+            if let Err(ParserError::Ignored) = result {
+                continue;
+            }
+
+            if let Err(ParserError::End) = result {
+                break;
+            }
+
+            if let Ok(statement) = result {            
+                stmts.push(statement);
+                expecting_statement_delimiter = true;
+            }
         }
         Ok(stmts)
     }
@@ -126,7 +255,8 @@ impl<'a> Parser<'a> {
                 "INSERT" => Ok(self.parse_insert()?),
                 _ => Err(ParserError::Ignored),
             },
-            _ => Err(ParserError::Ignored),
+            _ => Err(ParserError::End),
+            // TODO: Diferenciate between None and Some with other value
         }
     }
 
@@ -345,7 +475,7 @@ impl<'a> Parser<'a> {
         let mut index = self.index;
         loop {
             index += 1;
-            match self.tokenizer.peek_token(self.index - index - 1) {
+            match self.tokenizer.peek_token(index - self.index - 1) {
                 Ok(Some(Token::Whitespace(_))) => continue,
                 Ok(non_whitespace) => {
                     if n == 0 {
@@ -354,6 +484,25 @@ impl<'a> Parser<'a> {
                     n -= 1;
                 }
                 _ => return None,
+            }
+        }
+    }
+
+
+    fn execute_value_handler(&mut self) {
+        let token = self.commited_tokens.pop();
+
+        if let Some(token) = token {
+            if let Some(value_handler) = self.value_handler {
+                let token = value_handler(&self.context, token);
+
+                if self.last_tokens.pop().is_some() {
+                    self.last_tokens.push(token.clone());
+                }
+
+                self.commited_tokens.push(token);
+            } else {
+                self.commited_tokens.push(token);
             }
         }
     }
@@ -367,10 +516,12 @@ impl<'a> Parser<'a> {
             self.index += 1;
             match self.tokenizer.next_token() {
                 Ok(Some(Token::Whitespace(token))) => {
-                    self.last_tokens.push(Token::Whitespace(token));
+                    self.last_tokens.push(Token::Whitespace(token.clone()));
+                    self.commited_tokens.push(Token::Whitespace(token));
                     continue;
                 }
                 Ok(Some(token)) => {
+                    self.last_tokens.push(token.clone());
                     self.commited_tokens.push(token.clone());
                     return Some(token);
                 }
@@ -385,6 +536,7 @@ impl<'a> Parser<'a> {
     fn prev_token(&mut self) {
         self.last_tokens.reverse();
         for token in self.last_tokens.drain(0..) {
+            self.commited_tokens.pop();
             let token = token.clone();
             self.tokenizer.pushback_token(token);
         }
@@ -499,9 +651,12 @@ impl<'a> Parser<'a> {
 
     fn parse_create_table(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parse_object_name()?;
+        self.context.started_create_table(format!("{}", table_name));
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns()?;
         let with_options = self.parse_with_options()?;
+
+        self.context.ended_create_table();
 
         Ok(Statement::CreateTable {
             name: table_name,
@@ -525,7 +680,13 @@ impl<'a> Parser<'a> {
             if let Some(constraint) = self.parse_optional_table_constraint()? {
                 constraints.push(constraint);
             } else if let Some(Token::Word(column_name)) = self.peek_token() {
+                self.context
+                    .started_column_definition(format!("{}", column_name), columns.len());
+
                 self.next_token();
+
+                self.execute_value_handler();
+
                 let data_type = self.parse_data_type()?;
                 let collation = if self.parse_keyword("COLLATE") {
                     Some(self.parse_object_name()?)
@@ -546,6 +707,8 @@ impl<'a> Parser<'a> {
                     collation,
                     options,
                 });
+
+                self.context.ended_column_definition();
             } else {
                 let token = self.peek_token();
                 return self.expected("column name or constraint definition", token);
@@ -669,7 +832,13 @@ impl<'a> Parser<'a> {
 
     /// Parse a literal value (numbers, strings, date/time, booleans)
     fn parse_value(&mut self) -> Result<Value, ParserError> {
-        match self.next_token() {
+        let token = self.next_token();
+
+        if let SQLContextType::Insert(InsertContext::Value(_)) = self.context.context {
+            self.execute_value_handler();
+        }
+
+        match token {
             Some(t) => match t {
                 Token::Word(k) => match k.keyword.as_ref() {
                     "TRUE" => Ok(Value::Boolean(true)),
@@ -890,9 +1059,15 @@ impl<'a> Parser<'a> {
     /// Parse an INSERT statement
     fn parse_insert(&mut self) -> Result<Statement, ParserError> {
         self.expect_keyword("INTO")?;
+        self.context.started_insert();
         let table_name = self.parse_object_name()?;
+
+        self.context.started_insert_table(format!("{}", table_name));
+
         let columns = self.parse_parenthesized_column_list(Optional)?;
         let source = Box::new(self.parse_query()?);
+
+        self.context.ended_insert_table();
         Ok(Statement::Insert {
             table_name,
             columns,
@@ -903,7 +1078,14 @@ impl<'a> Parser<'a> {
     fn parse_values(&mut self) -> Result<Values, ParserError> {
         let values = self.parse_comma_separated(|parser| {
             parser.expect_token(&Token::LParen)?;
-            let exprs = parser.parse_comma_separated(|parser| parser.parse_expr())?;
+            let mut counter = 0;
+            let exprs = parser.parse_comma_separated(|parser| {
+                parser.context.started_insert_value(counter);
+                counter += 1;
+                let value = parser.parse_expr();
+                parser.context.ended_insert_value();
+                value
+            })?;
             parser.expect_token(&Token::RParen)?;
             Ok(exprs)
         })?;
