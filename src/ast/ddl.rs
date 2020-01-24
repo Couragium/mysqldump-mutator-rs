@@ -12,6 +12,7 @@
 
 //! AST types specific to CREATE/ALTER variants of [Statement]
 //! (commonly referred to as Data Definition Language, or DDL)
+use crate::ast::value::Value;
 use super::{display_comma_separated, DataType, Expr, Ident, ObjectName};
 use std::fmt;
 
@@ -98,6 +99,7 @@ impl fmt::Display for TableConstraint {
 pub struct ColumnDef {
     pub name: Ident,
     pub data_type: DataType,
+    pub data_config: Vec<Value>,
     pub collation: Option<ObjectName>,
     pub options: Vec<ColumnOptionDef>,
 }
@@ -148,6 +150,8 @@ pub enum ColumnOption {
     Null,
     /// `NOT NULL`
     NotNull,
+    /// `AUTO_INCREMENT`
+    Autoincrement,
     /// `DEFAULT <restricted-expr>`
     Default(Expr),
     /// `{ PRIMARY KEY | UNIQUE }`
@@ -170,6 +174,7 @@ impl fmt::Display for ColumnOption {
         match self {
             Null => write!(f, "NULL"),
             NotNull => write!(f, "NOT NULL"),
+            Autoincrement => write!(f, "AUTO_INCREMENT"),
             Default(expr) => write!(f, "DEFAULT {}", expr),
             Unique { is_primary } => {
                 write!(f, "{}", if *is_primary { "PRIMARY KEY" } else { "UNIQUE" })

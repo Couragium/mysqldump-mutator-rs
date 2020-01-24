@@ -12,6 +12,7 @@
 
 #[cfg(feature = "bigdecimal")]
 use bigdecimal::BigDecimal;
+use crate::ast::Ident;
 use std::fmt;
 
 /// Primitive SQL values such as number and string
@@ -55,6 +56,7 @@ pub enum Value {
         /// or as `__ TO SECOND(x)`.
         fractional_seconds_precision: Option<u64>,
     },
+    Identifier(Ident),
     /// `NULL` value
     Null,
 }
@@ -67,6 +69,7 @@ impl fmt::Display for Value {
             Value::NationalStringLiteral(v) => write!(f, "N'{}'", v),
             Value::HexStringLiteral(v) => write!(f, "X'{}'", v),
             Value::Boolean(v) => write!(f, "{}", v),
+            Value::Identifier(i) => write!(f, "{}", i),
             Value::Date(v) => write!(f, "DATE '{}'", escape_single_quote_string(v)),
             Value::Time(v) => write!(f, "TIME '{}'", escape_single_quote_string(v)),
             Value::Timestamp(v) => write!(f, "TIMESTAMP '{}'", escape_single_quote_string(v)),

@@ -71,7 +71,7 @@ impl fmt::Display for ParserError {
 
 impl Error for ParserError {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum SQLContextType {
     None,
     CreateTable(String),
@@ -79,7 +79,7 @@ enum SQLContextType {
     Insert(InsertContext),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum InsertContext {
     None,
     Table(String),
@@ -99,12 +99,15 @@ impl Default for SQLContext {
 
 impl SQLContext {
     pub fn new() -> SQLContext {
+        debug!("SQLContext::new");
         SQLContext {
             context: SQLContextType::None,
         }
     }
 
     fn started_create_table(&mut self, table: String) {
+        debug!("started_create_table {:?} {}", self.context, table);
+
         if let SQLContextType::None = self.context {
             return self.context = SQLContextType::CreateTable(table);
         }
@@ -113,30 +116,38 @@ impl SQLContext {
     }
 
     fn ended_create_table(&mut self) {
+        debug!("ended_create_table {:?}", self.context);
+
         if let SQLContextType::CreateTable(_) = self.context {
-            self.context = SQLContextType::None
+            return self.context = SQLContextType::None
         }
 
         panic!("Invalid context state");
     }
 
     fn started_column_definition(&mut self, column: String, index: usize) {
+        debug!("started_column_definition {:?} {} {}", self.context, column, index);
+
         if let SQLContextType::CreateTable(table) = &self.context {
-            self.context = SQLContextType::ColumnDefinition((table.clone(), column, index))
+            return self.context = SQLContextType::ColumnDefinition((table.clone(), column, index))
         }
 
         panic!("Invalid context state");
     }
 
     fn ended_column_definition(&mut self) {
+        debug!("ended_column_definition {:?}", self.context);
+
         if let SQLContextType::ColumnDefinition((table, _, _)) = &self.context {
-            self.context = SQLContextType::CreateTable(table.clone())
+            return self.context = SQLContextType::CreateTable(table.clone())
         }
 
         panic!("Invalid context state");
     }
 
     fn started_insert(&mut self) {
+        debug!("started_insert {:?}", self.context);
+
         if let SQLContextType::None = self.context {
             return self.context = SQLContextType::Insert(InsertContext::None);
         }
@@ -145,14 +156,18 @@ impl SQLContext {
     }
 
     fn ended_insert(&mut self) {
+        debug!("ended_insert {:?}", self.context);
+
         if let SQLContextType::Insert(_) = self.context {
-            self.context = SQLContextType::None
+            return self.context = SQLContextType::None
         }
 
         panic!("Invalid context state");
     }
 
     fn started_insert_table(&mut self, table: String) {
+        debug!("started_insert_table {:?} {}", self.context, table);
+
         if let SQLContextType::Insert(InsertContext::None) = self.context {
             return self.context = SQLContextType::Insert(InsertContext::Table(table));
         }
@@ -161,10 +176,18 @@ impl SQLContext {
     }
 
     fn ended_insert_table(&mut self) {
-        self.ended_insert();
+        debug!("ended_insert_table");
+
+        if let SQLContextType::Insert(InsertContext::Table(_)) = self.context {
+            return self.context = SQLContextType::Insert(InsertContext::None);
+        }
+
+        panic!("Invalid context state");
     }
 
     fn started_insert_value(&mut self, column: usize) {
+        debug!("started_insert_value {:?} {}", self.context, column);
+
         if let SQLContextType::Insert(InsertContext::Table(table)) = &self.context {
             return self.context =
                 SQLContextType::Insert(InsertContext::Value((table.clone(), column)));
@@ -174,7 +197,13 @@ impl SQLContext {
     }
 
     fn ended_insert_value(&mut self) {
-        self.ended_insert();
+        debug!("ended_insert_value {:?}", self.context);
+
+        if let SQLContextType::Insert(InsertContext::Value((table, _))) = &self.context {
+            return self.context = SQLContextType::Insert(InsertContext::Table(table.clone()))
+        }
+
+        panic!("Invalid context state");
     }
 }
 
@@ -229,13 +258,13 @@ impl<'a> Parser<'a> {
             }
 
             let result = parser.parse_statement();
-println!("{:?}", result);
+
             if let Err(ParserError::Ignored) = result {
                 continue;
             }
 
-            if let Err(ParserError::End) = result {
-                break;
+            if let Err(error) = result {
+                return Err(error);
             }
 
             if let Ok(statement) = result {            
@@ -255,7 +284,8 @@ println!("{:?}", result);
                 "INSERT" => Ok(self.parse_insert()?),
                 _ => Err(ParserError::Ignored),
             },
-            _ => Err(ParserError::End),
+            None => Err(ParserError::End),
+            _ => Err(ParserError::Ignored),
             // TODO: Diferenciate between None and Some with other value
         }
     }
@@ -517,7 +547,7 @@ println!("{:?}", result);
             match self.tokenizer.next_token() {
                 Ok(Some(Token::Whitespace(token))) => {
                     self.last_tokens.push(Token::Whitespace(token.clone()));
-                    self.commited_tokens.push(Token::Whitespace(token));
+                    self.commited_tokens.push(Token::Whitespace(token.clone()));
                     continue;
                 }
                 Ok(Some(token)) => {
@@ -574,7 +604,7 @@ println!("{:?}", result);
         let index = self.index;
         for keyword in keywords {
             if !self.parse_keyword(&keyword) {
-                //println!("parse_keywords aborting .. did not find {}", keyword);
+                //debug!("parse_keywords aborting .. did not find {}", keyword);
                 // reset index and return immediately
                 self.index = index;
                 return false;
@@ -654,6 +684,7 @@ println!("{:?}", result);
         self.context.started_create_table(format!("{}", table_name));
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns()?;
+
         let with_options = self.parse_with_options()?;
 
         self.context.ended_create_table();
@@ -677,7 +708,9 @@ println!("{:?}", result);
         }
 
         loop {
+            debug!("Parsing column! :D");
             if let Some(constraint) = self.parse_optional_table_constraint()? {
+                debug!("Is a optional table constrain! {:?}", constraint);
                 constraints.push(constraint);
             } else if let Some(Token::Word(column_name)) = self.peek_token() {
                 self.context
@@ -688,6 +721,12 @@ println!("{:?}", result);
                 self.execute_value_handler();
 
                 let data_type = self.parse_data_type()?;
+
+                let data_config = if let Some(Token::LParen) = self.peek_token() {
+                    self.parse_data_config()?
+                } else {
+                    vec!()
+                };
                 let collation = if self.parse_keyword("COLLATE") {
                     Some(self.parse_object_name()?)
                 } else {
@@ -695,7 +734,8 @@ println!("{:?}", result);
                 };
                 let mut options = vec![];
                 loop {
-                    match self.peek_token() {
+                    let token = self.peek_token();
+                    match token {
                         None | Some(Token::Comma) | Some(Token::RParen) => break,
                         _ => options.push(self.parse_column_option_def()?),
                     }
@@ -704,6 +744,7 @@ println!("{:?}", result);
                 columns.push(ColumnDef {
                     name: column_name.to_ident(),
                     data_type,
+                    data_config,
                     collation,
                     options,
                 });
@@ -733,10 +774,13 @@ println!("{:?}", result);
             None
         };
 
+
         let option = if self.parse_keywords(vec!["NOT", "NULL"]) {
             ColumnOption::NotNull
         } else if self.parse_keyword("NULL") {
             ColumnOption::Null
+        } else if self.parse_keyword("AUTO_INCREMENT") {
+            ColumnOption::Autoincrement
         } else if self.parse_keyword("DEFAULT") {
             ColumnOption::Default(self.parse_expr()?)
         } else if self.parse_keywords(vec!["PRIMARY", "KEY"]) {
@@ -760,7 +804,9 @@ println!("{:?}", result);
             return self.expected("column option", token);
         };
 
-        Ok(ColumnOptionDef { name, option })
+        let column_definition = ColumnOptionDef { name, option };
+
+        Ok(column_definition)
     }
 
     fn parse_optional_table_constraint(&mut self) -> Result<Option<TableConstraint>, ParserError> {
@@ -770,11 +816,25 @@ println!("{:?}", result);
             None
         };
         match self.next_token() {
-            Some(Token::Word(ref k)) if k.keyword == "PRIMARY" || k.keyword == "UNIQUE" => {
+            Some(Token::Word(ref k)) if k.keyword == "PRIMARY" || k.keyword == "UNIQUE" || k.keyword == "KEY" => {
                 let is_primary = k.keyword == "PRIMARY";
                 if is_primary {
                     self.expect_keyword("KEY")?;
                 }
+
+                if k.keyword == "UNIQUE" {
+                    let _ = self.consume_token(&Token::Word(Word{
+                        value: "KEY".to_string(),
+                        quote_style: None,
+                        keyword: "KEY".to_string(),
+                    }));
+                }
+
+                let _index_name = match self.peek_token() {
+                    Some(Token::Word(word)) if word.keyword == "" => self.next_token(),
+                    _ => None,
+                };
+
                 let columns = self.parse_parenthesized_column_list(Mandatory)?;
                 Ok(Some(TableConstraint::Unique {
                     name,
@@ -819,8 +879,30 @@ println!("{:?}", result);
             self.expect_token(&Token::RParen)?;
             Ok(options)
         } else {
-            Ok(vec![])
+            match self.peek_token() {
+                Some(Token::Word(word)) if word.keyword != "" => self.parse_mysql_table_options(),
+                _ => Ok(vec![]),
+            }
         }
+    }
+
+    pub fn parse_mysql_table_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+        let mut options: Vec<SqlOption> = vec!();
+
+        loop {
+            let _ = self.parse_keyword("DEFAULT");
+            match self.peek_token() {
+                Some(Token::Word(word)) if word.keyword != "" => {},
+                _ => {break;},
+            }
+
+            let name = self.parse_identifier()?;
+            self.expect_token(&Token::Eq)?;
+            let value = self.parse_value()?;
+            options.push(SqlOption { name, value });
+        }
+
+        Ok(options)
     }
 
     pub fn parse_sql_option(&mut self) -> Result<SqlOption, ParserError> {
@@ -844,6 +926,7 @@ println!("{:?}", result);
                     "TRUE" => Ok(Value::Boolean(true)),
                     "FALSE" => Ok(Value::Boolean(false)),
                     "NULL" => Ok(Value::Null),
+                    "" => Ok(Value::Identifier(Ident{value: k.value, quote_style: None})),
                     _ => {
                         return parser_err!(format!("No value parser for keyword {}", k.keyword));
                     }
@@ -941,6 +1024,14 @@ println!("{:?}", result);
             },
             other => self.expected("a data type name", other),
         }
+    }
+
+    /// Parse a SQL datatype config (in the context of a CREATE TABLE statement for example)
+    fn parse_data_config(&mut self) -> Result<Vec<Value>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let values = self.parse_comma_separated(|parser| parser.parse_value())?;
+        self.expect_token(&Token::RParen)?;
+        Ok(values)
     }
 
     /// Parse a possibly qualified, possibly quoted identifier, e.g.
@@ -1068,6 +1159,7 @@ println!("{:?}", result);
         let source = Box::new(self.parse_query()?);
 
         self.context.ended_insert_table();
+        self.context.ended_insert();
         Ok(Statement::Insert {
             table_name,
             columns,

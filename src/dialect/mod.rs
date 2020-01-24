@@ -32,7 +32,7 @@ pub trait Dialect: Debug {
     /// MySQL, MS SQL, and sqlite). You can accept one of characters listed
     /// in `Word::matching_end_quote` here
     fn is_delimited_identifier_start(&self, ch: char) -> bool {
-        ch == '"'
+        ch == '"' || ch == '`'
     }
     /// Determine if a character is a valid start character for an unquoted identifier
     fn is_identifier_start(&self, ch: char) -> bool;
