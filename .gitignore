@@ -11,3 +11,5 @@ Cargo.lock
 
 # IDEs
 .idea
+
+tests/migration_example_2.sql
