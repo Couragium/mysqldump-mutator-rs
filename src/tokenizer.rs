@@ -259,13 +259,12 @@ impl<'a> Tokenizer<'a> {
     /// Get the next token or return None
     pub fn next_token(&mut self) -> Result<Option<Token>, TokenizerError> {
         if let Some(token) = self.peeked_tokens.pop_front() {
-            println!("{:?}", token);
+            //println!("{:?}", token);
             return Ok(Some(token));
         }
         
-        let token = self.internal_next_token();
-        println!("{:?}", token);
-        token
+        self.internal_next_token()
+        //println!("{:?}", token);
     }
 
     fn internal_next_token(&mut self) -> Result<Option<Token>, TokenizerError> {
