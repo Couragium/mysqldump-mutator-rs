@@ -119,17 +119,20 @@ impl SQLContext {
         debug!("ended_create_table {:?}", self.context);
 
         if let SQLContextType::CreateTable(_) = self.context {
-            return self.context = SQLContextType::None
+            return self.context = SQLContextType::None;
         }
 
         panic!("Invalid context state");
     }
 
     fn started_column_definition(&mut self, column: String, index: usize) {
-        debug!("started_column_definition {:?} {} {}", self.context, column, index);
+        debug!(
+            "started_column_definition {:?} {} {}",
+            self.context, column, index
+        );
 
         if let SQLContextType::CreateTable(table) = &self.context {
-            return self.context = SQLContextType::ColumnDefinition((table.clone(), column, index))
+            return self.context = SQLContextType::ColumnDefinition((table.clone(), column, index));
         }
 
         panic!("Invalid context state");
@@ -139,7 +142,7 @@ impl SQLContext {
         debug!("ended_column_definition {:?}", self.context);
 
         if let SQLContextType::ColumnDefinition((table, _, _)) = &self.context {
-            return self.context = SQLContextType::CreateTable(table.clone())
+            return self.context = SQLContextType::CreateTable(table.clone());
         }
 
         panic!("Invalid context state");
@@ -159,7 +162,7 @@ impl SQLContext {
         debug!("ended_insert {:?}", self.context);
 
         if let SQLContextType::Insert(_) = self.context {
-            return self.context = SQLContextType::None
+            return self.context = SQLContextType::None;
         }
 
         panic!("Invalid context state");
@@ -200,7 +203,7 @@ impl SQLContext {
         debug!("ended_insert_value {:?}", self.context);
 
         if let SQLContextType::Insert(InsertContext::Value((table, _))) = &self.context {
-            return self.context = SQLContextType::Insert(InsertContext::Table(table.clone()))
+            return self.context = SQLContextType::Insert(InsertContext::Table(table.clone()));
         }
 
         panic!("Invalid context state");
@@ -267,7 +270,7 @@ impl<'a> Parser<'a> {
                 return Err(error);
             }
 
-            if let Ok(statement) = result {            
+            if let Ok(statement) = result {
                 stmts.push(statement);
                 expecting_statement_delimiter = true;
             }
@@ -391,7 +394,7 @@ impl<'a> Parser<'a> {
                 "IS" => {
                     if self.parse_keyword("NULL") {
                         Ok(Expr::IsNull(Box::new(expr)))
-                    } else if self.parse_keywords(vec!["NOT", "NULL"]) {
+                    } else if self.parse_keywords(&vec!["NOT", "NULL"]) {
                         Ok(Expr::IsNotNull(Box::new(expr)))
                     } else {
                         let token = self.peek_token();
@@ -518,6 +521,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn check_ahead<F>(&mut self, max: usize, check_fn: F) -> bool
+    where
+        F: Fn(&Token) -> bool,
+    {
+        for n in 0..max {
+            let found_token = self.peek_nth_token(n);
+            if let Some(found_token) = found_token {
+                if check_fn(&found_token) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
 
     fn execute_value_handler(&mut self) {
         let token = self.commited_tokens.pop();
@@ -600,17 +618,32 @@ impl<'a> Parser<'a> {
 
     /// Look for an expected sequence of keywords and consume them if they exist
     #[must_use]
-    fn parse_keywords(&mut self, keywords: Vec<&'static str>) -> bool {
-        let index = self.index;
-        for keyword in keywords {
-            if !self.parse_keyword(&keyword) {
-                //debug!("parse_keywords aborting .. did not find {}", keyword);
-                // reset index and return immediately
-                self.index = index;
-                return false;
+    // TODO: Fix the index rollback. It should use keywords pushback.
+    fn parse_keywords(&mut self, keywords: &[&'static str]) -> bool {
+        let mut parse_keywords = true;
+
+        for (index, word) in keywords.iter().enumerate() {
+            let found_token = self.peek_nth_token(index);
+
+            match found_token {
+                Some(Token::Word(found_word)) if found_word.keyword == *word => {},
+                _ => {
+                    parse_keywords = false;
+                    break;
+                }
             }
         }
-        true
+
+        if parse_keywords {
+            for (_, word) in keywords.iter().enumerate() {
+                if !self.parse_keyword(word) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        false
     }
 
     /// Bail out if the current token is not an expected keyword, or consume it if it is
@@ -671,11 +704,82 @@ impl<'a> Parser<'a> {
 
     /// Parse a SQL CREATE statement
     fn parse_create(&mut self) -> Result<Statement, ParserError> {
-        let token = self.peek_token();
-        if self.parse_keyword("TABLE") {
-            self.parse_create_table()
+        if self.is_after_newline() {
+            if self.parse_keyword("TABLE") {
+                return self.parse_create_table();
+            } else if self.check_ahead(15, |token| match token {
+                Token::Word(word) if word.keyword == "PROCEDURE" => true,
+                _ => false,
+            }) {
+                self.take_create_procedure();
+                return Err(ParserError::Ignored);
+            }
+        };
+
+        Err(ParserError::Ignored)
+    }
+
+    fn is_after_newline(&mut self) -> bool {
+        if let Token::Whitespace(Whitespace::Newline) = self.last_tokens[self.last_tokens.len() - 2]
+        {
+            true
         } else {
-            self.expected("TABLE after CREATE", token)
+            false
+        }
+    }
+
+    fn take_create_procedure(&mut self) {
+        //take until BEGIN
+        //TAKE UNTIL END
+        //  IN CASE OF IF OR LOOP, take until END IF or END LOOP recursively.
+        self.take_until(40, |_parser, token| match token {
+            Token::Word(word) if word.keyword == "BEGIN" => true,
+            _ => false,
+        });
+        self.next_token();
+        self.take_until(20000, |parser, token| match token {
+            Token::Word(_) if parser.peek_if_control_flow_start() => {
+                parser.take_control_flow_block();
+                true
+            }
+            Token::Word(word) if word.keyword == "END" => false,
+            _ => true,
+        });
+    }
+
+    fn take_control_flow_block(&mut self) {
+        let end_tokens = match self.next_token() {
+            Some(Token::Word(word)) if word.keyword == "IF" => vec!["END", "IF"],
+            Some(Token::Word(word)) if word.keyword == "LOOP" => vec!["END", "LOOP"],
+            Some(Token::Word(word)) if word.keyword == "BEGIN" => vec!["END"],
+            _ => return,
+        };
+
+        loop {
+            match self.peek_token() {
+                Some(Token::Word(_)) if self.peek_if_control_flow_start() => {
+                    self.take_control_flow_block();
+                }
+                Some(_) => {
+                    if self.parse_keywords(&end_tokens) {
+                        return;
+                    }
+
+                    self.next_token();
+                }
+                None => break,
+            }
+        }
+    }
+
+    fn peek_if_control_flow_start(&mut self) -> bool {
+        match self.peek_token() {
+            Some(Token::Word(word))
+                if word.keyword == "IF" || word.keyword == "LOOP" || word.keyword == "BEGIN" =>
+            {
+                true
+            }
+            _ => false,
         }
     }
 
@@ -698,6 +802,18 @@ impl<'a> Parser<'a> {
             file_format: None,
             location: None,
         })
+    }
+
+    fn take_until<F>(&mut self, max: usize, check_fn: F)
+    where
+        F: Fn(&mut Parser, &Token) -> bool,
+    {
+        for _ in 0..max {
+            match self.peek_token() {
+                Some(token) if check_fn(self, &token) => self.next_token(),
+                _ => return,
+            };
+        }
     }
 
     fn parse_columns(&mut self) -> Result<(Vec<ColumnDef>, Vec<TableConstraint>), ParserError> {
@@ -725,7 +841,7 @@ impl<'a> Parser<'a> {
                 let data_config = if let Some(Token::LParen) = self.peek_token() {
                     self.parse_data_config()?
                 } else {
-                    vec!()
+                    vec![]
                 };
                 let collation = if self.parse_keyword("COLLATE") {
                     Some(self.parse_object_name()?)
@@ -774,8 +890,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-
-        let option = if self.parse_keywords(vec!["NOT", "NULL"]) {
+        let option = if self.parse_keywords(&vec!["NOT", "NULL"]) {
             ColumnOption::NotNull
         } else if self.parse_keyword("NULL") {
             ColumnOption::Null
@@ -783,7 +898,7 @@ impl<'a> Parser<'a> {
             ColumnOption::Autoincrement
         } else if self.parse_keyword("DEFAULT") {
             ColumnOption::Default(self.parse_expr()?)
-        } else if self.parse_keywords(vec!["PRIMARY", "KEY"]) {
+        } else if self.parse_keywords(&vec!["PRIMARY", "KEY"]) {
             ColumnOption::Unique { is_primary: true }
         } else if self.parse_keyword("UNIQUE") {
             ColumnOption::Unique { is_primary: false }
@@ -816,14 +931,16 @@ impl<'a> Parser<'a> {
             None
         };
         match self.next_token() {
-            Some(Token::Word(ref k)) if k.keyword == "PRIMARY" || k.keyword == "UNIQUE" || k.keyword == "KEY" => {
+            Some(Token::Word(ref k))
+                if k.keyword == "PRIMARY" || k.keyword == "UNIQUE" || k.keyword == "KEY" =>
+            {
                 let is_primary = k.keyword == "PRIMARY";
                 if is_primary {
                     self.expect_keyword("KEY")?;
                 }
 
                 if k.keyword == "UNIQUE" {
-                    let _ = self.consume_token(&Token::Word(Word{
+                    let _ = self.consume_token(&Token::Word(Word {
                         value: "KEY".to_string(),
                         quote_style: None,
                         keyword: "KEY".to_string(),
@@ -887,13 +1004,15 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_mysql_table_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
-        let mut options: Vec<SqlOption> = vec!();
+        let mut options: Vec<SqlOption> = vec![];
 
         loop {
             let _ = self.parse_keyword("DEFAULT");
             match self.peek_token() {
-                Some(Token::Word(word)) if word.keyword != "" => {},
-                _ => {break;},
+                Some(Token::Word(word)) if word.keyword != "" => {}
+                _ => {
+                    break;
+                }
             }
 
             let name = self.parse_identifier()?;
@@ -926,7 +1045,10 @@ impl<'a> Parser<'a> {
                     "TRUE" => Ok(Value::Boolean(true)),
                     "FALSE" => Ok(Value::Boolean(false)),
                     "NULL" => Ok(Value::Null),
-                    "" => Ok(Value::Identifier(Ident{value: k.value, quote_style: None})),
+                    "" => Ok(Value::Identifier(Ident {
+                        value: k.value,
+                        quote_style: None,
+                    })),
                     _ => {
                         return parser_err!(format!("No value parser for keyword {}", k.keyword));
                     }
@@ -1149,6 +1271,9 @@ impl<'a> Parser<'a> {
 
     /// Parse an INSERT statement
     fn parse_insert(&mut self) -> Result<Statement, ParserError> {
+        if !self.is_after_newline() {
+            return Err(ParserError::Ignored);
+        }
         self.expect_keyword("INTO")?;
         self.context.started_insert();
         let table_name = self.parse_object_name()?;

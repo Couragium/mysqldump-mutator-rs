@@ -259,12 +259,13 @@ impl<'a> Tokenizer<'a> {
     /// Get the next token or return None
     pub fn next_token(&mut self) -> Result<Option<Token>, TokenizerError> {
         if let Some(token) = self.peeked_tokens.pop_front() {
-            //println!("{:?}", token);
+            println!("{:?}", token);
             return Ok(Some(token));
         }
         
-        self.internal_next_token()
-        //println!("{:?}", token);
+        let token = self.internal_next_token();
+        println!("{:?}", token);
+        token
     }
 
     fn internal_next_token(&mut self) -> Result<Option<Token>, TokenizerError> {
@@ -456,6 +457,21 @@ impl<'a> Tokenizer<'a> {
                         .map(|c| c.as_ref().unwrap() == &'\'')
                         .unwrap_or(false);
                     if escaped_quote {
+                        s.push('\'');
+                        s.push('\'');
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                '\\' => {
+                    chars.next(); // consume
+                    let next_char = chars
+                        .peek()
+                        .unwrap().as_ref()
+                        .unwrap();
+                    if next_char == &'\\' || next_char == &'\'' || next_char == &'\"' || next_char == &'n' || next_char == &'t' {
+                        s.push(*next_char);
                         s.push('\'');
                         chars.next();
                     } else {
