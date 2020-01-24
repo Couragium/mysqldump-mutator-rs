@@ -218,6 +218,7 @@ pub struct Parser<'a> {
     last_tokens: Vec<Token>,
     context: SQLContext,
     value_handler: Option<&'a dyn Fn(&SQLContext, Token) -> Token>,
+    commit_handler: Option<&'a dyn Fn(&[Token])>,
 }
 
 impl<'a> Parser<'a> {
@@ -226,6 +227,7 @@ impl<'a> Parser<'a> {
         dialect: &'a (dyn Dialect + 'a),
         sql: &'a mut dyn std::io::BufRead,
         handler: &'a dyn Fn(&SQLContext, Token) -> Token,
+        commit_handler: &'a dyn Fn(&[Token]),
     ) -> Self {
         Parser {
             index: 0,
@@ -234,6 +236,7 @@ impl<'a> Parser<'a> {
             last_tokens: vec![],
             context: SQLContext::new(),
             value_handler: Some(handler),
+            commit_handler: Some(commit_handler),
         }
     }
 
@@ -242,8 +245,9 @@ impl<'a> Parser<'a> {
         dialect: &dyn Dialect,
         sql: &mut dyn std::io::BufRead,
         handler: &'a dyn Fn(&SQLContext, Token) -> Token,
+        commit_handler: &'a dyn Fn(&[Token]),
     ) -> Result<Vec<Statement>, ParserError> {
-        let mut parser = Parser::new(dialect, sql, handler);
+        let mut parser = Parser::new(dialect, sql, handler, commit_handler);
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
 
@@ -261,6 +265,8 @@ impl<'a> Parser<'a> {
             }
 
             let result = parser.parse_statement();
+
+            parser.commit_tokens();
 
             if let Err(ParserError::Ignored) = result {
                 continue;
@@ -394,7 +400,7 @@ impl<'a> Parser<'a> {
                 "IS" => {
                     if self.parse_keyword("NULL") {
                         Ok(Expr::IsNull(Box::new(expr)))
-                    } else if self.parse_keywords(&vec!["NOT", "NULL"]) {
+                    } else if self.parse_keywords(&["NOT", "NULL"]) {
                         Ok(Expr::IsNotNull(Box::new(expr)))
                     } else {
                         let token = self.peek_token();
@@ -587,6 +593,15 @@ impl<'a> Parser<'a> {
             self.commited_tokens.pop();
             let token = token.clone();
             self.tokenizer.pushback_token(token);
+        }
+    }
+
+    fn commit_tokens(&mut self) {
+        self.last_tokens.truncate(0);
+        for token in self.commited_tokens.drain(0..) {
+            if let Some(handler) = self.commit_handler {
+                handler(&[token]);
+            }
         }
     }
 
@@ -890,7 +905,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let option = if self.parse_keywords(&vec!["NOT", "NULL"]) {
+        let option = if self.parse_keywords(&["NOT", "NULL"]) {
             ColumnOption::NotNull
         } else if self.parse_keyword("NULL") {
             ColumnOption::Null
@@ -898,7 +913,7 @@ impl<'a> Parser<'a> {
             ColumnOption::Autoincrement
         } else if self.parse_keyword("DEFAULT") {
             ColumnOption::Default(self.parse_expr()?)
-        } else if self.parse_keywords(&vec!["PRIMARY", "KEY"]) {
+        } else if self.parse_keywords(&["PRIMARY", "KEY"]) {
             ColumnOption::Unique { is_primary: true }
         } else if self.parse_keyword("UNIQUE") {
             ColumnOption::Unique { is_primary: false }
