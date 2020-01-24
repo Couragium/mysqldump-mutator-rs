@@ -598,10 +598,8 @@ impl<'a> Parser<'a> {
 
     fn commit_tokens(&mut self) {
         self.last_tokens.truncate(0);
-        for token in self.commited_tokens.drain(0..) {
-            if let Some(handler) = self.commit_handler {
-                handler(&[token]);
-            }
+        if let Some(handler) = self.commit_handler {
+            handler(&self.commited_tokens.drain(0..).collect::<Vec<_>>());
         }
     }
 
