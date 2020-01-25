@@ -8,7 +8,7 @@ use std::io::{self, BufReader};
 fn main() -> io::Result<()> {
     env_logger::init();
 
-    let f = File::open("tests/migration_example_2.sql")?;
+    let f = File::open("tests/migration_example.sql")?;
     let mut sql = BufReader::new(f);
 
     let dialect = MySqlDialect {};
