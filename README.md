@@ -6,7 +6,7 @@ You can check Andy Grove awesome work here: [https://github.com/andygrove/sqlpar
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-This library can parse a BufRead of a MySQL mysqldump file and it will call a lampda function every time the parser reaches a column or a value. This will allow you to change the content of a backup without parsing the whole file in memory first.
+This library can parse a BufRead of a MySQL mysqldump file and it will call a clousure function every time the parser reaches a column or a value. This will allow you to change the content of a backup without parsing the whole file in memory first.
 
 Changes I made:
 
