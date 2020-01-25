@@ -262,7 +262,7 @@ impl<'a> Tokenizer<'a> {
             //println!("{:?}", token);
             return Ok(Some(token));
         }
-        
+
         self.internal_next_token()
         //println!("{:?}", token);
     }
@@ -465,11 +465,13 @@ impl<'a> Tokenizer<'a> {
                 }
                 '\\' => {
                     chars.next(); // consume
-                    let next_char = chars
-                        .peek()
-                        .unwrap().as_ref()
-                        .unwrap();
-                    if next_char == &'\\' || next_char == &'\'' || next_char == &'\"' || next_char == &'n' || next_char == &'t' {
+                    let next_char = chars.peek().unwrap().as_ref().unwrap();
+                    if next_char == &'\\'
+                        || next_char == &'\''
+                        || next_char == &'\"'
+                        || next_char == &'n'
+                        || next_char == &'t'
+                    {
                         s.push('\\');
                         s.push(*next_char);
                         chars.next();

@@ -10,9 +10,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::ast::Ident;
 #[cfg(feature = "bigdecimal")]
 use bigdecimal::BigDecimal;
-use crate::ast::Ident;
 use std::fmt;
 
 /// Primitive SQL values such as number and string

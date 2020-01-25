@@ -639,7 +639,7 @@ impl<'a> Parser<'a> {
             let found_token = self.peek_nth_token(index);
 
             match found_token {
-                Some(Token::Word(found_word)) if found_word.keyword == *word => {},
+                Some(Token::Word(found_word)) if found_word.keyword == *word => {}
                 _ => {
                     parse_keywords = false;
                     break;

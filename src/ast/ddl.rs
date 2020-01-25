@@ -12,8 +12,8 @@
 
 //! AST types specific to CREATE/ALTER variants of [Statement]
 //! (commonly referred to as Data Definition Language, or DDL)
-use crate::ast::value::Value;
 use super::{display_comma_separated, DataType, Expr, Ident, ObjectName};
+use crate::ast::value::Value;
 use std::fmt;
 
 /// An `ALTER TABLE` (`Statement::AlterTable`) operation
