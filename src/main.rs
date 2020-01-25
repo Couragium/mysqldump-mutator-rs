@@ -1,6 +1,6 @@
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::*;
-use sqlparser::tokenizer::{Token, Word};
+//use sqlparser::tokenizer::{Token, Word};
 
 use std::io::{self, BufReader};
 use std::fs::File;
@@ -13,17 +13,23 @@ fn main() -> io::Result<()> {
 
     let dialect = MySqlDialect {};
 
+    let (mut count_a, mut count_b) = (0, 0);
 
-    let _result = Parser::parse_sql(&dialect, &mut sql, &|_context, _token| {
-    	//println!("{:?} {}", context, token);
-    	Token::Word(Word {value: "42".to_string(), quote_style: None, keyword: "".to_string()})
-    }, &|tokens| {
-    	for token in tokens {
-    		print!("{}", token)
-    	}
+    let _result = Parser::parse_sql(&dialect, &mut sql, &mut |_context, token| {
+        //println!("{:?} {}", context, token);
+        //Token::Word(Word {value: "42".to_string(), quote_style: None, keyword: "".to_string()})
+        count_a += 1;
+        token
+    }, &mut |tokens| {
+        for token in tokens {
+            print!("{}", token)
+        }
+        count_b += 1;
     });
 
     //println!("{:?}", result);
+
+    //println!("{} {}", count_a, count_b);
 
     Ok(())
 }

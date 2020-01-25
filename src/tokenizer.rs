@@ -47,7 +47,7 @@ pub enum Token {
     /// Equality operator `=`
     Eq,
     /// Not Equals operator `<>` (or `!=` in some dialects)
-    Neq,
+    Neq([char; 2]),
     /// Less Than operator `<`
     Lt,
     /// Greater han operator `>`
@@ -104,7 +104,7 @@ impl fmt::Display for Token {
             Token::Comma => f.write_str(","),
             Token::Whitespace(ws) => write!(f, "{}", ws),
             Token::Eq => f.write_str("="),
-            Token::Neq => f.write_str("<>"),
+            Token::Neq(values) => write!(f, "{}{}", values[0], values[1]),
             Token::Lt => f.write_str("<"),
             Token::Gt => f.write_str(">"),
             Token::LtEq => f.write_str("<="),
@@ -388,7 +388,7 @@ impl<'a> Tokenizer<'a> {
                 '!' => {
                     self.query.next(); // consume
                     match self.query.peek() {
-                        Some(Ok('=')) => self.consume_and_return(Token::Neq),
+                        Some(Ok('=')) => self.consume_and_return(Token::Neq(['!', '='])),
                         _ => Err(TokenizerError(format!(
                             "Tokenizer Error at Line: {}, Col: {}",
                             self.line, self.col
@@ -399,7 +399,7 @@ impl<'a> Tokenizer<'a> {
                     self.query.next(); // consume
                     match self.query.peek() {
                         Some(Ok('=')) => self.consume_and_return(Token::LtEq),
-                        Some(Ok('>')) => self.consume_and_return(Token::Neq),
+                        Some(Ok('>')) => self.consume_and_return(Token::Neq(['<', '>'])),
                         _ => Ok(Some(Token::Lt)),
                     }
                 }
@@ -470,8 +470,8 @@ impl<'a> Tokenizer<'a> {
                         .unwrap().as_ref()
                         .unwrap();
                     if next_char == &'\\' || next_char == &'\'' || next_char == &'\"' || next_char == &'n' || next_char == &'t' {
+                        s.push('\\');
                         s.push(*next_char);
-                        s.push('\'');
                         chars.next();
                     } else {
                         break;

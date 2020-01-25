@@ -217,8 +217,8 @@ pub struct Parser<'a> {
     tokenizer: Tokenizer<'a>,
     last_tokens: Vec<Token>,
     context: SQLContext,
-    value_handler: Option<&'a dyn Fn(&SQLContext, Token) -> Token>,
-    commit_handler: Option<&'a dyn Fn(&[Token])>,
+    value_handler: Option<&'a mut dyn FnMut(&SQLContext, Token) -> Token>,
+    commit_handler: Option<&'a mut dyn FnMut(&[Token])>,
 }
 
 impl<'a> Parser<'a> {
@@ -226,8 +226,8 @@ impl<'a> Parser<'a> {
     pub fn new(
         dialect: &'a (dyn Dialect + 'a),
         sql: &'a mut dyn std::io::BufRead,
-        handler: &'a dyn Fn(&SQLContext, Token) -> Token,
-        commit_handler: &'a dyn Fn(&[Token]),
+        handler: &'a mut dyn FnMut(&SQLContext, Token) -> Token,
+        commit_handler: &'a mut dyn FnMut(&[Token]),
     ) -> Self {
         Parser {
             index: 0,
@@ -244,8 +244,8 @@ impl<'a> Parser<'a> {
     pub fn parse_sql(
         dialect: &dyn Dialect,
         sql: &mut dyn std::io::BufRead,
-        handler: &'a dyn Fn(&SQLContext, Token) -> Token,
-        commit_handler: &'a dyn Fn(&[Token]),
+        handler: &'a mut dyn FnMut(&SQLContext, Token) -> Token,
+        commit_handler: &'a mut dyn FnMut(&[Token]),
     ) -> Result<Vec<Statement>, ParserError> {
         let mut parser = Parser::new(dialect, sql, handler, commit_handler);
         let mut stmts = Vec::new();
@@ -363,7 +363,7 @@ impl<'a> Parser<'a> {
 
         let regular_binary_operator = match tok {
             Token::Eq => Some(BinaryOperator::Eq),
-            Token::Neq => Some(BinaryOperator::NotEq),
+            Token::Neq(_) => Some(BinaryOperator::NotEq),
             Token::Gt => Some(BinaryOperator::Gt),
             Token::GtEq => Some(BinaryOperator::GtEq),
             Token::Lt => Some(BinaryOperator::Lt),
@@ -490,7 +490,7 @@ impl<'a> Parser<'a> {
                 Token::Word(k) if k.keyword == "IN" => Ok(Self::BETWEEN_PREC),
                 Token::Word(k) if k.keyword == "BETWEEN" => Ok(Self::BETWEEN_PREC),
                 Token::Word(k) if k.keyword == "LIKE" => Ok(Self::BETWEEN_PREC),
-                Token::Eq | Token::Lt | Token::LtEq | Token::Neq | Token::Gt | Token::GtEq => {
+                Token::Eq | Token::Lt | Token::LtEq | Token::Neq(_) | Token::Gt | Token::GtEq => {
                     Ok(20)
                 }
                 Token::Plus | Token::Minus => Ok(Self::PLUS_MINUS_PREC),
@@ -547,7 +547,7 @@ impl<'a> Parser<'a> {
         let token = self.commited_tokens.pop();
 
         if let Some(token) = token {
-            if let Some(value_handler) = self.value_handler {
+            if let Some(ref mut value_handler) = self.value_handler {
                 let token = value_handler(&self.context, token);
 
                 if self.last_tokens.pop().is_some() {
@@ -598,7 +598,7 @@ impl<'a> Parser<'a> {
 
     fn commit_tokens(&mut self) {
         self.last_tokens.truncate(0);
-        if let Some(handler) = self.commit_handler {
+        if let Some(ref mut handler) = self.commit_handler {
             handler(&self.commited_tokens.drain(0..).collect::<Vec<_>>());
         }
     }
