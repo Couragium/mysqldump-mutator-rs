@@ -24,10 +24,10 @@ fn main() -> io::Result<()> {
             //count_a += 1;
             token
         },
-        &mut |_tokens| {
-            /*for token in tokens {
+        &mut |tokens| {
+            for token in tokens {
                 print!("{}", token)
-            }*/
+            }
             //count_b += 1;
         },
     );

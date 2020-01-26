@@ -267,7 +267,10 @@ impl<'a> Parser<'a> {
             let result = parser.parse_statement();
 
             match result {
-                Err(ParserError::Ignored) => continue,
+                Err(ParserError::Ignored) => {
+                    parser.commit_tokens();
+                    continue;
+                },
                 Err(error) => {
                     println!();
                     for token in parser.commited_tokens.drain(0..) {
@@ -283,6 +286,7 @@ impl<'a> Parser<'a> {
                 },
             }
         }
+        parser.commit_tokens();
         Ok(stmts)
     }
 
