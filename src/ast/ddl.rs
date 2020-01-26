@@ -100,7 +100,6 @@ pub struct ColumnDef {
     pub name: Ident,
     pub data_type: DataType,
     pub data_config: Vec<Value>,
-    pub collation: Option<ObjectName>,
     pub options: Vec<ColumnOptionDef>,
 }
 
@@ -152,6 +151,9 @@ pub enum ColumnOption {
     NotNull,
     /// `AUTO_INCREMENT`
     Autoincrement,
+    Collate,
+    CharacterSet,
+    Comment,
     /// `DEFAULT <restricted-expr>`
     Default(Expr),
     /// `{ PRIMARY KEY | UNIQUE }`
@@ -175,6 +177,9 @@ impl fmt::Display for ColumnOption {
             Null => write!(f, "NULL"),
             NotNull => write!(f, "NOT NULL"),
             Autoincrement => write!(f, "AUTO_INCREMENT"),
+            Collate => write!(f, "COLLATE"),
+            CharacterSet => write!(f, "CHARACTER SET"),
+            Comment => write!(f, "COMMENT"),
             Default(expr) => write!(f, "DEFAULT {}", expr),
             Unique { is_primary } => {
                 write!(f, "{}", if *is_primary { "PRIMARY KEY" } else { "UNIQUE" })

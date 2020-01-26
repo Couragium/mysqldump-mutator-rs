@@ -266,19 +266,21 @@ impl<'a> Parser<'a> {
 
             let result = parser.parse_statement();
 
-            parser.commit_tokens();
-
-            if let Err(ParserError::Ignored) = result {
-                continue;
-            }
-
-            if let Err(error) = result {
-                return Err(error);
-            }
-
-            if let Ok(statement) = result {
-                stmts.push(statement);
-                expecting_statement_delimiter = true;
+            match result {
+                Err(ParserError::Ignored) => continue,
+                Err(error) => {
+                    println!();
+                    for token in parser.commited_tokens.drain(0..) {
+                        print!("{}", token);
+                    }
+                    println!();
+                    return Err(error);
+                },
+                Ok(statement) => {
+                    stmts.push(statement);
+                    expecting_statement_delimiter = true;
+                    parser.commit_tokens();
+                },
             }
         }
         Ok(stmts)
@@ -600,6 +602,8 @@ impl<'a> Parser<'a> {
         self.last_tokens.truncate(0);
         if let Some(ref mut handler) = self.commit_handler {
             handler(&self.commited_tokens.drain(0..).collect::<Vec<_>>());
+        } else {
+            self.commited_tokens.truncate(0);
         }
     }
 
@@ -705,9 +709,10 @@ impl<'a> Parser<'a> {
     where
         F: FnMut(&mut Parser) -> Result<T, ParserError>,
     {
-        let mut values = vec![];
+        let values = vec![];
         loop {
-            values.push(f(self)?);
+            // Explanation: We don't want the parser to keep in memory HUGE tables, therefore, we just don't save them
+            /*values.push(*/f(self)?/*)*/;
             if !self.consume_token(&Token::Comma) {
                 break;
             }
@@ -837,7 +842,6 @@ impl<'a> Parser<'a> {
         }
 
         loop {
-            debug!("Parsing column! :D");
             if let Some(constraint) = self.parse_optional_table_constraint()? {
                 debug!("Is a optional table constrain! {:?}", constraint);
                 constraints.push(constraint);
@@ -856,15 +860,15 @@ impl<'a> Parser<'a> {
                 } else {
                     vec![]
                 };
-                let collation = if self.parse_keyword("COLLATE") {
-                    Some(self.parse_object_name()?)
-                } else {
-                    None
-                };
+
+                if data_type == DataType::Int || data_type == DataType::BigInt || data_type == DataType::SmallInt {
+                    let _ = self.parse_keyword("UNSIGNED");
+                    let _ = self.parse_keyword("SIGNED");
+                }
+
                 let mut options = vec![];
                 loop {
-                    let token = self.peek_token();
-                    match token {
+                    match self.peek_token() {
                         None | Some(Token::Comma) | Some(Token::RParen) => break,
                         _ => options.push(self.parse_column_option_def()?),
                     }
@@ -874,7 +878,6 @@ impl<'a> Parser<'a> {
                     name: column_name.to_ident(),
                     data_type,
                     data_config,
-                    collation,
                     options,
                 });
 
@@ -905,8 +908,17 @@ impl<'a> Parser<'a> {
 
         let option = if self.parse_keywords(&["NOT", "NULL"]) {
             ColumnOption::NotNull
+        } else if self.parse_keywords(&["CHARACTER", "SET"]) {
+            self.parse_object_name()?;
+            ColumnOption::NotNull
         } else if self.parse_keyword("NULL") {
             ColumnOption::Null
+        } else if self.parse_keyword("COMMENT") {
+            self.next_token();
+            ColumnOption::Comment
+        } else if self.parse_keyword("COLLATE") {
+            self.parse_object_name()?;
+            ColumnOption::Collate
         } else if self.parse_keyword("AUTO_INCREMENT") {
             ColumnOption::Autoincrement
         } else if self.parse_keyword("DEFAULT") {
@@ -915,6 +927,8 @@ impl<'a> Parser<'a> {
             ColumnOption::Unique { is_primary: true }
         } else if self.parse_keyword("UNIQUE") {
             ColumnOption::Unique { is_primary: false }
+        } else if self.parse_keywords(&["ON", "UPDATE"]) {
+            ColumnOption::Default(self.parse_expr()?)
         } else if self.parse_keyword("REFERENCES") {
             let foreign_table = self.parse_object_name()?;
             let referred_columns = self.parse_parenthesized_column_list(Mandatory)?;
@@ -945,19 +959,12 @@ impl<'a> Parser<'a> {
         };
         match self.next_token() {
             Some(Token::Word(ref k))
-                if k.keyword == "PRIMARY" || k.keyword == "UNIQUE" || k.keyword == "KEY" =>
+                if k.keyword == "PRIMARY" || k.keyword == "UNIQUE" || k.keyword == "KEY" || k.keyword == "FULLTEXT" =>
             {
                 let is_primary = k.keyword == "PRIMARY";
-                if is_primary {
-                    self.expect_keyword("KEY")?;
-                }
 
-                if k.keyword == "UNIQUE" {
-                    let _ = self.consume_token(&Token::Word(Word {
-                        value: "KEY".to_string(),
-                        quote_style: None,
-                        keyword: "KEY".to_string(),
-                    }));
+                if k.keyword == "UNIQUE" || k.keyword == "FULLTEXT" || k.keyword == "PRIMARY"{
+                    let _ = self.parse_keyword("KEY");
                 }
 
                 let _index_name = match self.peek_token() {
@@ -978,6 +985,35 @@ impl<'a> Parser<'a> {
                 self.expect_keyword("REFERENCES")?;
                 let foreign_table = self.parse_object_name()?;
                 let referred_columns = self.parse_parenthesized_column_list(Mandatory)?;
+
+                // TODO: Match these configs into memory
+                while self.parse_keyword("ON") {
+                    let identifier = self.parse_identifier()?;
+                    if identifier.value != "DELETE" && identifier.value != "UPDATE" {
+                        return self.expected("DELETE, UPDATE", Some(Token::Word(identifier.to_word())));
+                    }
+
+                    let identifier = self.parse_identifier()?;
+
+                    match identifier.value.as_str() {
+                        "RESTRICT" | "CASCADE" => {
+                            continue;
+                        },
+                        "SET" | "NO" => {
+                            match self.peek_token() {
+                                Some(Token::Word(word)) if word.keyword == "NULL" || word.keyword == "ACTION"|| word.keyword == "DEFAULT" => {
+                                    self.next_token();
+                                },
+                                Some(token) => return self.expected("NULL, ACTION, DEFAULT", Some(token)),
+                                None => return parser_err!("Expecting a NULL, ACTION, DEFAULT but found EOF"),
+                            }
+                        },
+                        _ => {
+                            return self.expected("RESTRICT, CASCADE, SET, NO", Some(Token::Word(identifier.to_word())));
+                        }
+                    }
+                }
+
                 Ok(Some(TableConstraint::ForeignKey {
                     name,
                     columns,
@@ -1062,6 +1098,10 @@ impl<'a> Parser<'a> {
                         value: k.value,
                         quote_style: None,
                     })),
+                    "CSV" => Ok(Value::Identifier(Ident {
+                        value: k.value,
+                        quote_style: None,
+                    })),
                     _ => {
                         return parser_err!(format!("No value parser for keyword {}", k.keyword));
                     }
@@ -1105,7 +1145,8 @@ impl<'a> Parser<'a> {
                     let _ = self.parse_keyword("PRECISION");
                     Ok(DataType::Double)
                 }
-                "SMALLINT" => Ok(DataType::SmallInt),
+                //TODO: Extend the types to recognize these culumn values
+                "SMALLINT" | "TINYINT" | "MEDIUMINT" => Ok(DataType::SmallInt),
                 "INT" | "INTEGER" => Ok(DataType::Int),
                 "BIGINT" => Ok(DataType::BigInt),
                 "VARCHAR" => Ok(DataType::Varchar(self.parse_optional_precision()?)),
@@ -1196,7 +1237,15 @@ impl<'a> Parser<'a> {
         optional: IsOptional,
     ) -> Result<Vec<Ident>, ParserError> {
         if self.consume_token(&Token::LParen) {
-            let cols = self.parse_comma_separated(|parser| parser.parse_identifier())?;
+            let cols = self.parse_comma_separated(|parser| {
+                let ident = parser.parse_identifier();
+                if let Some(Token::LParen) = parser.peek_token() {
+                    parser.next_token();
+                    let _ = parser.parse_value();
+                    parser.expect_token(&Token::RParen)?;
+                };
+                ident
+            })?;
             self.expect_token(&Token::RParen)?;
             Ok(cols)
         } else if optional == Optional {
@@ -1298,6 +1347,7 @@ impl<'a> Parser<'a> {
 
         self.context.ended_insert_table();
         self.context.ended_insert();
+
         Ok(Statement::Insert {
             table_name,
             columns,
@@ -1306,7 +1356,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_values(&mut self) -> Result<Values, ParserError> {
-        let values = self.parse_comma_separated(|parser| {
+        let _values = self.parse_comma_separated(|parser| {
             parser.expect_token(&Token::LParen)?;
             let mut counter = 0;
             let exprs = parser.parse_comma_separated(|parser| {
@@ -1319,7 +1369,8 @@ impl<'a> Parser<'a> {
             parser.expect_token(&Token::RParen)?;
             Ok(exprs)
         })?;
-        Ok(Values(values))
+        Ok(Values(vec!()))
+        //Ok(Values(values))
     }
 }
 
@@ -1328,6 +1379,17 @@ impl Word {
         Ident {
             value: self.value.clone(),
             quote_style: self.quote_style,
+        }
+    }
+}
+
+
+impl Ident {
+    fn to_word(&self) -> Word {
+        Word {
+            value: self.value.clone(),
+            quote_style: self.quote_style,
+            keyword: self.value.clone(),
         }
     }
 }

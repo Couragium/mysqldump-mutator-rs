@@ -364,7 +364,14 @@ impl<'a> Tokenizer<'a> {
                                 s.push(ch);
                             }
                             Ok(Some(Token::Whitespace(Whitespace::SingleLineComment(s))))
-                        }
+                        },
+                        Some(Ok('0'..='9')) => {
+                            let s = self.peeking_take_while(|ch| match ch {
+                                '0'..='9' | '.' => true,
+                                _ => false,
+                            });
+                            Ok(Some(Token::Number(format!("-{}", s))))
+                        },
                         // a regular '-' operator
                         _ => Ok(Some(Token::Minus)),
                     }
@@ -471,6 +478,8 @@ impl<'a> Tokenizer<'a> {
                         || next_char == &'\"'
                         || next_char == &'n'
                         || next_char == &'t'
+                        || next_char == &'r'
+                        || next_char == &'0'
                     {
                         s.push('\\');
                         s.push(*next_char);
