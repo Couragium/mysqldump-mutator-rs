@@ -14,7 +14,7 @@ include = [
 edition = "2018"
 
 [lib]
-name = "sqlparser"
+name = "mysqldump_mutator"
 path = "src/lib.rs"
 
 [dependencies]
