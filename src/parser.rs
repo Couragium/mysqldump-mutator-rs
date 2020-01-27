@@ -13,10 +13,11 @@
 //! SQL Parser
 
 use log::debug;
+use std::io::BufRead;
 
 use super::ast::*;
 use super::dialect::keywords;
-use super::dialect::Dialect;
+use super::dialect::MySqlDialect;
 use super::tokenizer::*;
 use std::error::Error;
 use std::fmt;
@@ -42,11 +43,6 @@ pub enum IsOptional {
     Mandatory,
 }
 use IsOptional::*;
-
-pub enum IsLateral {
-    Lateral,
-    NotLateral,
-}
 
 impl From<TokenizerError> for ParserError {
     fn from(e: TokenizerError) -> Self {
@@ -211,28 +207,25 @@ impl SQLContext {
 }
 
 /// SQL Parser
-pub struct Parser<'a> {
+pub struct Parser<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])> {
     index: usize,
     commited_tokens: Vec<Token>,
-    tokenizer: Tokenizer<'a>,
+    tokenizer: Tokenizer<'a, R, MySqlDialect>,
     last_tokens: Vec<Token>,
     context: SQLContext,
-    value_handler: Option<&'a mut dyn FnMut(&SQLContext, Token) -> Token>,
-    commit_handler: Option<&'a mut dyn FnMut(&[Token])>,
+    value_handler: Option<H>,
+    commit_handler: Option<CH>,
 }
 
-impl<'a> Parser<'a> {
+impl<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])>
+    Parser<'a, R, H, CH>
+{
     /// Parse the specified tokens
-    pub fn new(
-        dialect: &'a (dyn Dialect + 'a),
-        sql: &'a mut dyn std::io::BufRead,
-        handler: &'a mut dyn FnMut(&SQLContext, Token) -> Token,
-        commit_handler: &'a mut dyn FnMut(&[Token]),
-    ) -> Self {
+    fn new(sql: &'a mut R, handler: H, commit_handler: CH) -> Self {
         Parser {
             index: 0,
             commited_tokens: vec![],
-            tokenizer: Tokenizer::new(dialect, sql),
+            tokenizer: Tokenizer::new(MySqlDialect {}, sql),
             last_tokens: vec![],
             context: SQLContext::new(),
             value_handler: Some(handler),
@@ -240,14 +233,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a SQL statement and produce an Abstract Syntax Tree (AST)
-    pub fn parse_sql(
-        dialect: &dyn Dialect,
-        sql: &mut dyn std::io::BufRead,
-        handler: &'a mut dyn FnMut(&SQLContext, Token) -> Token,
-        commit_handler: &'a mut dyn FnMut(&[Token]),
+    /// Parse a SQL statement. Calls handler for each row definition and commit_handler each time the parser finalizes parsing and mutating some set of tokens.
+    pub fn parse_mysqldump(
+        mut sql: R,
+        handler: H,
+        commit_handler: CH,
     ) -> Result<Vec<Statement>, ParserError> {
-        let mut parser = Parser::new(dialect, sql, handler, commit_handler);
+        let mut parser = Parser::new(&mut sql, handler, commit_handler);
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
 
@@ -270,7 +262,7 @@ impl<'a> Parser<'a> {
                 Err(ParserError::Ignored) => {
                     parser.commit_tokens();
                     continue;
-                },
+                }
                 Err(error) => {
                     println!();
                     for token in parser.commited_tokens.drain(0..) {
@@ -278,12 +270,12 @@ impl<'a> Parser<'a> {
                     }
                     println!();
                     return Err(error);
-                },
+                }
                 Ok(statement) => {
                     stmts.push(statement);
                     expecting_statement_delimiter = true;
                     parser.commit_tokens();
-                },
+                }
             }
         }
         parser.commit_tokens();
@@ -711,12 +703,13 @@ impl<'a> Parser<'a> {
     /// Parse a comma-separated list of 1+ items accepted by `F`
     fn parse_comma_separated<T, F>(&mut self, mut f: F) -> Result<Vec<T>, ParserError>
     where
-        F: FnMut(&mut Parser) -> Result<T, ParserError>,
+        F: FnMut(&mut Parser<R, H, CH>) -> Result<T, ParserError>,
     {
         let values = vec![];
         loop {
             // Explanation: We don't want the parser to keep in memory HUGE tables, therefore, we just don't save them
-            /*values.push(*/f(self)?/*)*/;
+            /*values.push(*/
+            f(self)?/*)*/;
             if !self.consume_token(&Token::Comma) {
                 break;
             }
@@ -754,12 +747,12 @@ impl<'a> Parser<'a> {
         //take until BEGIN
         //TAKE UNTIL END
         //  IN CASE OF IF OR LOOP, take until END IF or END LOOP recursively.
-        self.take_until(40, |_parser, token| match token {
+        self.take_until(40, |_parser: &mut Parser<R, H, CH>, token| match token {
             Token::Word(word) if word.keyword == "BEGIN" => true,
             _ => false,
         });
         self.next_token();
-        self.take_until(20000, |parser, token| match token {
+        self.take_until(20000, |parser: &mut Parser<R, H, CH>, token| match token {
             Token::Word(_) if parser.peek_if_control_flow_start() => {
                 parser.take_control_flow_block();
                 true
@@ -828,7 +821,7 @@ impl<'a> Parser<'a> {
 
     fn take_until<F>(&mut self, max: usize, check_fn: F)
     where
-        F: Fn(&mut Parser, &Token) -> bool,
+        F: Fn(&mut Parser<R, H, CH>, &Token) -> bool,
     {
         for _ in 0..max {
             match self.peek_token() {
@@ -865,7 +858,10 @@ impl<'a> Parser<'a> {
                     vec![]
                 };
 
-                if data_type == DataType::Int || data_type == DataType::BigInt || data_type == DataType::SmallInt {
+                if data_type == DataType::Int
+                    || data_type == DataType::BigInt
+                    || data_type == DataType::SmallInt
+                {
                     let _ = self.parse_keyword("UNSIGNED");
                     let _ = self.parse_keyword("SIGNED");
                 }
@@ -963,11 +959,14 @@ impl<'a> Parser<'a> {
         };
         match self.next_token() {
             Some(Token::Word(ref k))
-                if k.keyword == "PRIMARY" || k.keyword == "UNIQUE" || k.keyword == "KEY" || k.keyword == "FULLTEXT" =>
+                if k.keyword == "PRIMARY"
+                    || k.keyword == "UNIQUE"
+                    || k.keyword == "KEY"
+                    || k.keyword == "FULLTEXT" =>
             {
                 let is_primary = k.keyword == "PRIMARY";
 
-                if k.keyword == "UNIQUE" || k.keyword == "FULLTEXT" || k.keyword == "PRIMARY"{
+                if k.keyword == "UNIQUE" || k.keyword == "FULLTEXT" || k.keyword == "PRIMARY" {
                     let _ = self.parse_keyword("KEY");
                 }
 
@@ -994,7 +993,8 @@ impl<'a> Parser<'a> {
                 while self.parse_keyword("ON") {
                     let identifier = self.parse_identifier()?;
                     if identifier.value != "DELETE" && identifier.value != "UPDATE" {
-                        return self.expected("DELETE, UPDATE", Some(Token::Word(identifier.to_word())));
+                        return self
+                            .expected("DELETE, UPDATE", Some(Token::Word(identifier.to_word())));
                     }
 
                     let identifier = self.parse_identifier()?;
@@ -1002,18 +1002,29 @@ impl<'a> Parser<'a> {
                     match identifier.value.as_str() {
                         "RESTRICT" | "CASCADE" => {
                             continue;
-                        },
-                        "SET" | "NO" => {
-                            match self.peek_token() {
-                                Some(Token::Word(word)) if word.keyword == "NULL" || word.keyword == "ACTION"|| word.keyword == "DEFAULT" => {
-                                    self.next_token();
-                                },
-                                Some(token) => return self.expected("NULL, ACTION, DEFAULT", Some(token)),
-                                None => return parser_err!("Expecting a NULL, ACTION, DEFAULT but found EOF"),
+                        }
+                        "SET" | "NO" => match self.peek_token() {
+                            Some(Token::Word(word))
+                                if word.keyword == "NULL"
+                                    || word.keyword == "ACTION"
+                                    || word.keyword == "DEFAULT" =>
+                            {
+                                self.next_token();
+                            }
+                            Some(token) => {
+                                return self.expected("NULL, ACTION, DEFAULT", Some(token))
+                            }
+                            None => {
+                                return parser_err!(
+                                    "Expecting a NULL, ACTION, DEFAULT but found EOF"
+                                )
                             }
                         },
                         _ => {
-                            return self.expected("RESTRICT, CASCADE, SET, NO", Some(Token::Word(identifier.to_word())));
+                            return self.expected(
+                                "RESTRICT, CASCADE, SET, NO",
+                                Some(Token::Word(identifier.to_word())),
+                            );
                         }
                     }
                 }
@@ -1056,7 +1067,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_mysql_table_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+    fn parse_mysql_table_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
         let mut options: Vec<SqlOption> = vec![];
 
         loop {
@@ -1077,7 +1088,7 @@ impl<'a> Parser<'a> {
         Ok(options)
     }
 
-    pub fn parse_sql_option(&mut self) -> Result<SqlOption, ParserError> {
+    fn parse_sql_option(&mut self) -> Result<SqlOption, ParserError> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
         let value = self.parse_value()?;
@@ -1373,7 +1384,7 @@ impl<'a> Parser<'a> {
             parser.expect_token(&Token::RParen)?;
             Ok(exprs)
         })?;
-        Ok(Values(vec!()))
+        Ok(Values(vec![]))
         //Ok(Values(values))
     }
 }
@@ -1386,7 +1397,6 @@ impl Word {
         }
     }
 }
-
 
 impl Ident {
     fn to_word(&self) -> Word {

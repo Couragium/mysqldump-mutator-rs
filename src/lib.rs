@@ -34,7 +34,13 @@
 //! ```
 #![warn(clippy::all)]
 
-pub mod ast;
-pub mod dialect;
-pub mod parser;
-pub mod tokenizer;
+mod ast;
+mod dialect;
+mod parser;
+mod tokenizer;
+
+pub use dialect::MySqlDialect;
+pub use parser::Parser;
+pub use tokenizer::Token;
+pub use tokenizer::Whitespace;
+pub use tokenizer::Word;

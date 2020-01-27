@@ -430,23 +430,3 @@ define_keywords!(
     ZONE,
     END_EXEC = "END-EXEC"
 );
-
-/// These keywords can't be used as a table alias, so that `FROM table_name alias`
-/// can be parsed unambiguously without looking ahead.
-pub const RESERVED_FOR_TABLE_ALIAS: &[&str] = &[
-    // Reserved as both a table and a column alias:
-    WITH, SELECT, WHERE, GROUP, HAVING, ORDER, TOP, LIMIT, OFFSET, FETCH, UNION, EXCEPT, INTERSECT,
-    // Reserved only as a table alias in the `FROM`/`JOIN` clauses:
-    ON, JOIN, INNER, CROSS, FULL, LEFT, RIGHT, NATURAL, USING,
-    // for MSSQL-specific OUTER APPLY (seems reserved in most dialects)
-    OUTER,
-];
-
-/// Can't be used as a column alias, so that `SELECT <expr> alias`
-/// can be parsed unambiguously without looking ahead.
-pub const RESERVED_FOR_COLUMN_ALIAS: &[&str] = &[
-    // Reserved as both a table and a column alias:
-    WITH, SELECT, WHERE, GROUP, HAVING, ORDER, LIMIT, OFFSET, FETCH, UNION, EXCEPT, INTERSECT,
-    // Reserved only as a column alias in the `SELECT` clause:
-    FROM,
-];

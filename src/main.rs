@@ -1,5 +1,4 @@
-use sqlparser::dialect::MySqlDialect;
-use sqlparser::parser::*;
+use sqlparser::Parser;
 //use sqlparser::tokenizer::{Token, Word};
 
 use std::fs::File;
@@ -9,22 +8,18 @@ fn main() -> io::Result<()> {
     env_logger::init();
 
     let f = File::open("/home/david/Documents/Omnea/dump_custarea.sql")?;
-    let mut sql = BufReader::new(f);
-
-    let dialect = MySqlDialect {};
 
     //let (mut count_a, mut count_b) = (0, 0);
 
-    let result = Parser::parse_sql(
-        &dialect,
-        &mut sql,
-        &mut |_context, token| {
+    let result = Parser::parse_mysqldump(
+        BufReader::new(f),
+        |_context, token| {
             //println!("{:?} {}", context, token);
             //Token::Word(Word {value: "42".to_string(), quote_style: None, keyword: "".to_string()})
             //count_a += 1;
             token
         },
-        &mut |tokens| {
+        |tokens| {
             for token in tokens {
                 print!("{}", token)
             }

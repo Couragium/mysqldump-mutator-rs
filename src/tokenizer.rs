@@ -215,17 +215,17 @@ impl fmt::Display for Whitespace {
 pub struct TokenizerError(String);
 
 /// SQL Tokenizer
-pub struct Tokenizer<'a> {
-    dialect: &'a dyn Dialect,
-    pub query: Peekable<Chars<'a, dyn BufRead + 'a>>,
+pub struct Tokenizer<'a, R: BufRead, D: Dialect> {
+    dialect: D,
+    pub query: Peekable<Chars<'a, R>>,
     pub line: u64,
     pub col: u64,
     peeked_tokens: VecDeque<Token>,
 }
 
-impl<'a> Tokenizer<'a> {
+impl<'a, R: BufRead, D: Dialect> Tokenizer<'a, R, D> {
     /// Create a new SQL tokenizer for the specified SQL statement
-    pub fn new(dialect: &'a dyn Dialect, query: &'a mut dyn BufRead) -> Self {
+    pub fn new(dialect: D, query: &'a mut R) -> Self {
         Self {
             dialect,
             query: query.chars().peekable(),
@@ -328,7 +328,7 @@ impl<'a> Tokenizer<'a> {
                 quote_start if self.dialect.is_delimited_identifier_start(quote_start) => {
                     self.query.next(); // consume the opening quote
                     let quote_end = Word::matching_end_quote(quote_start);
-                    let s = self.peeking_take_while(|ch| ch != quote_end);
+                    let s = self.peeking_take_while(|_tok, ch| ch != quote_end);
                     match self.query.next() {
                         Some(Ok(ch)) if ch == quote_end => {
                             Ok(Some(Token::make_word(&s, Some(quote_start))))
@@ -342,7 +342,7 @@ impl<'a> Tokenizer<'a> {
                 // numbers
                 '0'..='9' => {
                     // TODO: https://jakewheat.github.io/sql-overview/sql-2011-foundation-grammar.html#unsigned-numeric-literal
-                    let s = self.peeking_take_while(|ch| match ch {
+                    let s = self.peeking_take_while(|_tok, ch| match ch {
                         '0'..='9' | '.' => true,
                         _ => false,
                     });
@@ -358,20 +358,20 @@ impl<'a> Tokenizer<'a> {
                     match self.query.peek() {
                         Some(Ok('-')) => {
                             self.query.next(); // consume the second '-', starting a single-line comment
-                            let mut s = self.peeking_take_while(|ch| ch != '\n');
+                            let mut s = self.peeking_take_while(|_tok, ch| ch != '\n');
                             if let Some(Ok(ch)) = self.query.next() {
                                 assert_eq!(ch, '\n');
                                 s.push(ch);
                             }
                             Ok(Some(Token::Whitespace(Whitespace::SingleLineComment(s))))
-                        },
+                        }
                         Some(Ok('0'..='9')) => {
-                            let s = self.peeking_take_while(|ch| match ch {
+                            let s = self.peeking_take_while(|_tok, ch| match ch {
                                 '0'..='9' | '.' => true,
                                 _ => false,
                             });
                             Ok(Some(Token::Number(format!("-{}", s))))
-                        },
+                        }
                         // a regular '-' operator
                         _ => Ok(Some(Token::Minus)),
                     }
@@ -440,8 +440,7 @@ impl<'a> Tokenizer<'a> {
     /// Tokenize an identifier or keyword, after the first char is already consumed.
     fn tokenize_word(&mut self, first_char: char) -> String {
         let mut s = first_char.to_string();
-        let dialect = self.dialect;
-        s.push_str(&self.peeking_take_while(|ch| dialect.is_identifier_part(ch)));
+        s.push_str(&self.peeking_take_while(|tok, ch| tok.dialect.is_identifier_part(ch)));
         s
     }
 
@@ -533,11 +532,14 @@ impl<'a> Tokenizer<'a> {
     /// Read from `chars` until `predicate` returns `false` or EOF is hit.
     /// Return the characters read as String, and keep the first non-matching
     /// char available as `chars.next()`.
-    fn peeking_take_while(&mut self, mut predicate: impl FnMut(char) -> bool) -> String {
+    fn peeking_take_while(
+        &mut self,
+        mut predicate: impl FnMut(&mut Tokenizer<'a, R, D>, char) -> bool,
+    ) -> String {
         let mut s = String::new();
         while let Some(Ok(ch)) = self.query.peek() {
             let ch = *ch;
-            if predicate(ch) {
+            if predicate(self, ch) {
                 self.query.next(); // consume
                 s.push(ch);
             } else {
