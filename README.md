@@ -8,7 +8,7 @@ You can check Andy Grove awesome work here: [https://github.com/andygrove/sqlpar
 
 This library can parse a BufRead of a MySQL mysqldump file and it will call a clousure function every time the parser reaches a column or a value. This will allow you to change the content of a backup without parsing the whole file in memory first.
 
-Changes I made:
+Changes made:
 
  - The previous parser assumed that had all the tokens already in memory. This ones parses only what it needs and therefore, doesn't needs to load the whole file in order to work.
  - I deleted a lot of code (I would say around 50%). With it, I removed many many features.
