@@ -131,10 +131,11 @@ impl fmt::Display for Token {
 }
 
 impl Token {
-    pub fn make_keyword(keyword: &str) -> Self {
-        Token::make_word(keyword, None)
-    }
-    pub fn make_word(word: &str, quote_style: Option<char>) -> Self {
+    /*fn make_keyword(keyword: &str) -> Self {
+        Token::new(keyword, None)
+    }*/
+
+    pub fn new(word: &str, quote_style: Option<char>) -> Self {
         let word_uppercase = word.to_uppercase();
         //TODO: need to reintroduce FnvHashSet at some point .. iterating over keywords is
         // not fast but I want the simplicity for now while I experiment with pluggable
@@ -292,7 +293,7 @@ impl<'a, R: BufRead, D: Dialect> Tokenizer<'a, R, D> {
                         _ => {
                             // regular identifier starting with an "N"
                             let s = self.tokenize_word('N');
-                            Ok(Some(Token::make_word(&s, None)))
+                            Ok(Some(Token::new(&s, None)))
                         }
                     }
                 }
@@ -309,7 +310,7 @@ impl<'a, R: BufRead, D: Dialect> Tokenizer<'a, R, D> {
                         _ => {
                             // regular identifier starting with an "X"
                             let s = self.tokenize_word(x);
-                            Ok(Some(Token::make_word(&s, None)))
+                            Ok(Some(Token::new(&s, None)))
                         }
                     }
                 }
@@ -317,7 +318,7 @@ impl<'a, R: BufRead, D: Dialect> Tokenizer<'a, R, D> {
                 ch if self.dialect.is_identifier_start(ch) => {
                     self.query.next(); // consume the first char
                     let s = self.tokenize_word(ch);
-                    Ok(Some(Token::make_word(&s, None)))
+                    Ok(Some(Token::new(&s, None)))
                 }
                 // string
                 '\'' => {
@@ -331,7 +332,7 @@ impl<'a, R: BufRead, D: Dialect> Tokenizer<'a, R, D> {
                     let s = self.peeking_take_while(|_tok, ch| ch != quote_end);
                     match self.query.next() {
                         Some(Ok(ch)) if ch == quote_end => {
-                            Ok(Some(Token::make_word(&s, Some(quote_start))))
+                            Ok(Some(Token::new(&s, Some(quote_start))))
                         }
                         _ => Err(TokenizerError(format!(
                             "Expected close delimiter '{}' before EOF.",
