@@ -10,28 +10,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SQL Parser for Rust
+//! MySQL mysqldump stream processor / mutator in Rust
 //!
-//! Example code:
-//!
-//! This crate provides an ANSI:SQL 2011 lexer and parser that can parse SQL
-//! into an Abstract Syntax Tree (AST).
-//!
-//! ```
-//! use sqlparser::dialect::GenericDialect;
-//! use sqlparser::parser::Parser;
-//!
-//! let dialect = GenericDialect {}; // or AnsiDialect
-//!
-//! let sql = "SELECT a, b, 123, myfunc(b) \
-//!            FROM table_1 \
-//!            WHERE a > b AND b < 100 \
-//!            ORDER BY a DESC, b";
-//!
-//! let ast = Parser::parse_sql(&dialect, sql.to_string()).unwrap();
-//!
-//! println!("AST: {:?}", ast);
-//! ```
+//! This crate allows to parse and the insert values of a mysqldump file 
+//! and change them on the fly. Its intended usage is to anonymize a 
+//! mysqldump backup in order to safely allow to be shared between 
+//! developers.
+
 #![warn(clippy::all)]
 
 mod ast;
