@@ -22,14 +22,6 @@ pub enum DataType {
     Varchar(Option<u64>),
     /// Uuid type
     Uuid,
-    /// Large character object e.g. CLOB(1000)
-    Clob(u64),
-    /// Fixed-length binary type e.g. BINARY(10)
-    Binary(u64),
-    /// Variable-length binary type e.g. VARBINARY(10)
-    Varbinary(u64),
-    /// Large binary object e.g. BLOB(1000)
-    Blob(u64),
     /// Decimal type with optional precision and scale e.g. DECIMAL(10,2)
     Decimal(Option<u64>, Option<u64>),
     /// Floating point with optional precision e.g. FLOAT(8)
@@ -74,10 +66,6 @@ impl fmt::Display for DataType {
                 format_type_with_optional_length(f, "character varying", size)
             }
             DataType::Uuid => write!(f, "uuid"),
-            DataType::Clob(size) => write!(f, "clob({})", size),
-            DataType::Binary(size) => write!(f, "binary({})", size),
-            DataType::Varbinary(size) => write!(f, "varbinary({})", size),
-            DataType::Blob(size) => write!(f, "blob({})", size),
             DataType::Decimal(precision, scale) => {
                 if let Some(scale) = scale {
                     write!(f, "numeric({},{})", precision.unwrap(), scale)

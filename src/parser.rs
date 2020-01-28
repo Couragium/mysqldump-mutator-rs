@@ -238,9 +238,8 @@ impl<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])>
         mut sql: R,
         handler: H,
         commit_handler: CH,
-    ) -> Result<Vec<Statement>, ParserError> {
+    ) -> Result<(), ParserError> {
         let mut parser = Parser::new(&mut sql, handler, commit_handler);
-        let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
 
         loop {
@@ -271,20 +270,19 @@ impl<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])>
                     println!();
                     return Err(error);
                 }
-                Ok(statement) => {
-                    stmts.push(statement);
+                Ok(_) => {
                     expecting_statement_delimiter = true;
                     parser.commit_tokens();
                 }
             }
         }
         parser.commit_tokens();
-        Ok(stmts)
+        Ok(())
     }
 
     /// Parse a single top-level statement (such as SELECT, INSERT, CREATE, etc.),
     /// stopping before the statement separator, if any.
-    fn parse_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_statement(&mut self) -> Result<(), ParserError> {
         match self.next_token() {
             Some(Token::Word(ref w)) if w.keyword != "" => match w.keyword.as_ref() {
                 "CREATE" => Ok(self.parse_create()?),
@@ -718,7 +716,7 @@ impl<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])>
     }
 
     /// Parse a SQL CREATE statement
-    fn parse_create(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create(&mut self) -> Result<(), ParserError> {
         if self.is_after_newline() {
             if self.parse_keyword("TABLE") {
                 return self.parse_create_table();
@@ -798,25 +796,17 @@ impl<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])>
         }
     }
 
-    fn parse_create_table(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_table(&mut self) -> Result<(), ParserError> {
         let table_name = self.parse_object_name()?;
         self.context.started_create_table(format!("{}", table_name));
         // parse optional column list (schema)
-        let (columns, constraints) = self.parse_columns()?;
+        let (_columns, _constraints) = self.parse_columns()?;
 
-        let with_options = self.parse_with_options()?;
+        let _with_options = self.parse_with_options()?;
 
         self.context.ended_create_table();
 
-        Ok(Statement::CreateTable {
-            name: table_name,
-            columns,
-            constraints,
-            with_options,
-            external: false,
-            file_format: None,
-            location: None,
-        })
+        Ok(())
     }
 
     fn take_until<F>(&mut self, max: usize, check_fn: F)
@@ -1347,7 +1337,7 @@ impl<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])>
     }
 
     /// Parse an INSERT statement
-    fn parse_insert(&mut self) -> Result<Statement, ParserError> {
+    fn parse_insert(&mut self) -> Result<(), ParserError> {
         if !self.is_after_newline() {
             return Err(ParserError::Ignored);
         }
@@ -1357,17 +1347,13 @@ impl<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])>
 
         self.context.started_insert_table(format!("{}", table_name));
 
-        let columns = self.parse_parenthesized_column_list(Optional)?;
-        let source = Box::new(self.parse_query()?);
+        let _columns = self.parse_parenthesized_column_list(Optional)?;
+        let _source = Box::new(self.parse_query()?);
 
         self.context.ended_insert_table();
         self.context.ended_insert();
 
-        Ok(Statement::Insert {
-            table_name,
-            columns,
-            source,
-        })
+        Ok(())
     }
 
     fn parse_values(&mut self) -> Result<Values, ParserError> {

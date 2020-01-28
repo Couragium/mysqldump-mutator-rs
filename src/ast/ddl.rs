@@ -16,24 +16,6 @@ use super::{display_comma_separated, DataType, Expr, Ident, ObjectName};
 use crate::ast::value::Value;
 use std::fmt;
 
-/// An `ALTER TABLE` (`Statement::AlterTable`) operation
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum AlterTableOperation {
-    /// `ADD <table_constraint>`
-    AddConstraint(TableConstraint),
-    /// TODO: implement `DROP CONSTRAINT <name>`
-    DropConstraint { name: Ident },
-}
-
-impl fmt::Display for AlterTableOperation {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            AlterTableOperation::AddConstraint(c) => write!(f, "ADD {}", c),
-            AlterTableOperation::DropConstraint { name } => write!(f, "DROP CONSTRAINT {}", name),
-        }
-    }
-}
-
 /// A table-level constraint, specified in a `CREATE TABLE` or an
 /// `ALTER TABLE ADD <constraint>` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -152,7 +134,6 @@ pub enum ColumnOption {
     /// `AUTO_INCREMENT`
     Autoincrement,
     Collate,
-    CharacterSet,
     Comment,
     /// `DEFAULT <restricted-expr>`
     Default(Expr),
@@ -178,7 +159,6 @@ impl fmt::Display for ColumnOption {
             NotNull => write!(f, "NOT NULL"),
             Autoincrement => write!(f, "AUTO_INCREMENT"),
             Collate => write!(f, "COLLATE"),
-            CharacterSet => write!(f, "CHARACTER SET"),
             Comment => write!(f, "COMMENT"),
             Default(expr) => write!(f, "DEFAULT {}", expr),
             Unique { is_primary } => {

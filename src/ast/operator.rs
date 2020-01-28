@@ -12,24 +12,6 @@
 
 use std::fmt;
 
-/// Unary operators
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum UnaryOperator {
-    Plus,
-    Minus,
-    Not,
-}
-
-impl fmt::Display for UnaryOperator {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match self {
-            UnaryOperator::Plus => "+",
-            UnaryOperator::Minus => "-",
-            UnaryOperator::Not => "NOT",
-        })
-    }
-}
-
 /// Binary operators
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BinaryOperator {
