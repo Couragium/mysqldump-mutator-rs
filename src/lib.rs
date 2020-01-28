@@ -39,8 +39,5 @@ mod dialect;
 mod parser;
 mod tokenizer;
 
-pub use dialect::MySqlDialect;
 pub use parser::Parser;
 pub use tokenizer::Token;
-pub use tokenizer::Whitespace;
-pub use tokenizer::Word;

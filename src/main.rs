@@ -1,8 +1,7 @@
 use mysqldump_mutator::{Parser/*, Token*/};
-use std::io::Write;
 
 use std::fs::File;
-use std::io::{self, BufReader};
+use std::io::{self, Write, BufReader, stderr};
 
 fn main() -> io::Result<()> {
     env_logger::init();
@@ -16,7 +15,6 @@ fn main() -> io::Result<()> {
         |_context, token| {
             //println!("{:?} {}", context, token);
             //Token::new(&format!("REDACTED{}", count_a), Some('\''));
-            //Token::Word(Word {value: "42".to_string(), quote_style: None, keyword: "".to_string()})
             //count_a += 1;
             token
         },
@@ -29,7 +27,7 @@ fn main() -> io::Result<()> {
     );
 
     if let Err(result) = result {
-        let stderr = io::stderr();
+        let stderr = stderr();
         let mut handle = stderr.lock();
 
         handle.write_all(
