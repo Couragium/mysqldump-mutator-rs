@@ -1,6 +1,6 @@
 # MySQL mysqldump stream processor / mutator in Rust
 
-This library is based on another library for parsing SQL. I just took that library, simplified it, change what I needed and adapted it for what I needed in order to parse mysqldump files.
+This library is based on another library for parsing SQL. I just took that library, simplified it, change and adapted it for parsing and mutating on-the-fly mysqldump files.
 
 You can check Andy Grove awesome work here: [https://github.com/andygrove/sqlparser-rs](https://github.com/andygrove/sqlparser-rs)
 
