@@ -135,6 +135,7 @@ impl Token {
         Token::new(keyword, None)
     }*/
 
+    /// Creates a new token. quote style is None for integers.
     pub fn new(word: &str, quote_style: Option<char>) -> Self {
         let word_uppercase = word.to_uppercase();
         //TODO: need to reintroduce FnvHashSet at some point .. iterating over keywords is
@@ -150,6 +151,53 @@ impl Token {
                 "".to_string()
             },
         })
+    }
+
+    /// Gets the value of the column encoded in an string. For numbers use get_number
+    pub fn get_value(&self) -> String {
+        match self {
+            Token::Word(word) => word.value.clone(),
+            Token::SingleQuotedString(ref s)
+            | Token::NationalStringLiteral(ref s)
+            | Token::HexStringLiteral(ref s) => s.clone(),
+            _ => format!("{}", self),
+        }
+    }
+
+    /// If the token contains a number and it can be parsed, returns Some(number). None if not.
+    pub fn get_number(&self) -> Option<f64> {
+        match self {
+            Token::Number(number) => {
+                let number = number.parse();
+                match number {
+                    Ok(number) => Some(number),
+                    Err(_) => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// returns if the Token contains a keyword
+    pub fn is_keyword(&self) -> bool {
+        match self {
+            Token::Word(word) if word.keyword != "" => true,
+            _ => false,
+        }
+    }
+
+    /// gets the quote style. None if none or it doesn't apply
+    pub fn get_quote_style(&self) -> Option<char> {
+        match self {
+            Token::Word(word) => word.quote_style,
+            _ => None,
+        }
+    }
+}
+
+impl From<Token> for String {
+    fn from(token: Token) -> String {
+        format!("{}", token)
     }
 }
 

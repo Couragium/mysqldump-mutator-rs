@@ -67,18 +67,27 @@ impl fmt::Display for ParserError {
 
 impl Error for ParserError {}
 
+/// Context given to the value handler clousure. This indicates where in the query is the parser.
+///
+/// For example, SQLContextType::ColumnDefinition((table_name, column_name, column_index))
+/// Or SQLContextType::Insert(InsertContext::Value(table_name, column_index))
 #[derive(Debug, Clone)]
-enum SQLContextType {
+pub enum SQLContextType {
     None,
+    /// Contains the table name
     CreateTable(String),
+    /// Contains the table name, the column name and the column index
     ColumnDefinition((String, String, usize)),
+    /// Contains an Inser context
     Insert(InsertContext),
 }
 
 #[derive(Debug, Clone)]
-enum InsertContext {
+pub enum InsertContext {
     None,
+    /// Contains the table name
     Table(String),
+    /// Contains the table name and the column index
     Value((String, usize)),
 }
 
@@ -99,6 +108,10 @@ impl SQLContext {
         SQLContext {
             context: SQLContextType::None,
         }
+    }
+
+    pub fn get_context(&self) -> SQLContextType {
+        self.context.clone()
     }
 
     fn started_create_table(&mut self, table: String) {
@@ -207,7 +220,7 @@ impl SQLContext {
 }
 
 /// SQL Parser
-pub struct Parser<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])> {
+pub struct Parser<'a, R: BufRead, H: FnMut(&SQLContextType, Token) -> Token, CH: FnMut(&[Token])> {
     index: usize,
     commited_tokens: Vec<Token>,
     tokenizer: Tokenizer<'a, R, MySqlDialect>,
@@ -217,7 +230,7 @@ pub struct Parser<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnM
     commit_handler: Option<CH>,
 }
 
-impl<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])>
+impl<'a, R: BufRead, H: FnMut(&SQLContextType, Token) -> Token, CH: FnMut(&[Token])>
     Parser<'a, R, H, CH>
 {
     /// Parse the specified tokens
@@ -234,11 +247,7 @@ impl<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])>
     }
 
     /// Parse a SQL statement. Calls handler for each row definition and commit_handler each time the parser finalizes parsing and mutating some set of tokens.
-    pub fn parse_mysqldump(
-        mut sql: R,
-        handler: H,
-        commit_handler: CH,
-    ) -> Result<(), ParserError> {
+    pub fn parse_mysqldump(mut sql: R, handler: H, commit_handler: CH) -> Result<(), ParserError> {
         let mut parser = Parser::new(&mut sql, handler, commit_handler);
         let mut expecting_statement_delimiter = false;
 
@@ -544,7 +553,7 @@ impl<'a, R: BufRead, H: FnMut(&SQLContext, Token) -> Token, CH: FnMut(&[Token])>
 
         if let Some(token) = token {
             if let Some(ref mut value_handler) = self.value_handler {
-                let token = value_handler(&self.context, token);
+                let token = value_handler(&self.context.get_context(), token);
 
                 if self.last_tokens.pop().is_some() {
                     self.last_tokens.push(token.clone());

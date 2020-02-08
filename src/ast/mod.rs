@@ -21,13 +21,10 @@ mod value;
 use std::fmt;
 
 pub use self::data_type::DataType;
-pub use self::ddl::{
-    ColumnDef, ColumnOption, ColumnOptionDef, TableConstraint,
-};
+pub use self::ddl::{ColumnDef, ColumnOption, ColumnOptionDef, TableConstraint};
 pub use self::operator::BinaryOperator;
 pub use self::query::{
-    Cte, Fetch, OrderByExpr, Query,
-    SetExpr, SetOperator, TableAlias, Top, Values,
+    Cte, Fetch, OrderByExpr, Query, SetExpr, SetOperator, TableAlias, Top, Values,
 };
 pub use self::value::Value;
 
@@ -78,8 +75,7 @@ pub struct Ident {
     pub quote_style: Option<char>,
 }
 
-impl Ident {
-}
+impl Ident {}
 
 impl From<&str> for Ident {
     fn from(value: &str) -> Self {
@@ -215,8 +211,7 @@ impl fmt::Display for Expr {
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Statement {
-}
+pub enum Statement {}
 
 /// SQL assignment `foo = expr` as used in SQLUpdate
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -282,8 +277,7 @@ impl FromStr for FileFormat {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ObjectType {
-}
+pub enum ObjectType {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SqlOption {
@@ -298,23 +292,16 @@ impl fmt::Display for SqlOption {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TransactionMode {
-}
+pub enum TransactionMode {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TransactionAccessMode {
-}
+pub enum TransactionAccessMode {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TransactionIsolationLevel {
-}
-
+pub enum TransactionIsolationLevel {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ShowStatementFilter {
-}
+pub enum ShowStatementFilter {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SetVariableValue {
-}
-
+pub enum SetVariableValue {}

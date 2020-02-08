@@ -70,10 +70,7 @@ impl fmt::Display for SetExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SetOperator {
-
-}
-
+pub enum SetOperator {}
 
 /// A single CTE (used after `WITH`): `alias [(col1, col2, ...)] AS ( query )`
 /// The names in the column list before `AS`, when specified, replace the names
